@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NX_DAEMON: "false"
+  # The development network needs a PyPI mirror; GitHub runners use upstream.
+  UV_DEFAULT_INDEX: https://pypi.org/simple
+
+jobs:
+  checks:
+    name: Build, test, typecheck, lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        working-directory: apps/ai-worker
+        run: uv sync --all-groups --frozen
+
+      - name: Derive the Nx affected range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            case "$base" in
+              ""|0000000000000000000000000000000000000000)
+                base="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+                [ -n "$base" ] || base="$(git rev-parse HEAD~1 2>/dev/null || true)"
+                [ -n "$base" ] || base="$head"
+                ;;
+            esac
+          fi
+          echo "NX_BASE=$base" >> "$GITHUB_ENV"
+          echo "NX_HEAD=$head" >> "$GITHUB_ENV"
+
+      - name: Nx affected build, test, and typecheck
+        run: pnpm exec nx affected -t build test typecheck --base="$NX_BASE" --head="$NX_HEAD"
+
+      - name: Go unit tests
+        working-directory: apps/control-plane
+        run: go test -race ./...
+
+      - name: Biome
+        run: pnpm lint
+
+  playwright:
+    name: Playwright smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run the smoke
+        run: pnpm exec nx run web:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+
+  compose:
+    name: Compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SRS_IMAGE: ossrs/srs:v6.0-r2
+      REDIS_IMAGE: redis:7-alpine
+      CADDY_IMAGE: caddy:2-alpine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start infrastructure
+        run: docker compose -f infra/compose.yaml up -d --wait
+
+      - name: Check the SRS API
+        run: curl -fsS http://127.0.0.1:1985/api/v1/versions
+
+      - name: Check Caddy
+        run: curl -fsS http://127.0.0.1:8088/
+
+      - name: Check Redis
+        run: docker compose -f infra/compose.yaml exec -T redis redis-cli ping
+
+      - name: Show status
+        run: docker compose -f infra/compose.yaml ps
+
+      - name: Stop infrastructure
+        if: always()
+        run: docker compose -f infra/compose.yaml down -v
+
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [checks, playwright, compose]
+    if: always()
+    steps:
+      - name: Fail when any job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+
+      - name: Confirm
+        run: echo "All checks passed"

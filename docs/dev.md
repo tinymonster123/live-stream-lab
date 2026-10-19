@@ -176,6 +176,30 @@ pnpm exec nx run ai-worker:test
 pnpm exec nx run contracts:test
 ```
 
+## CI
+
+`.github/workflows/ci.yml` 在 pull request、push 到 `main` 和手动触发时运行三个并行 job：
+
+| Job | 内容 |
+|---|---|
+| Build, test, typecheck, lint | `nx affected` 跑受影响项目的 build/test/typecheck；`go test -race ./...`；`biome check .` |
+| Playwright smoke | 安装 Chromium，启动 Vite，检查首屏与 Broadcast 表单 |
+| Compose smoke | 用官方 Docker Hub 镜像启动 SRS/Redis/Caddy，等待健康检查，验证三个服务后清理 |
+
+`nx affected` 在 PR 上用 base/head SHA，在 push 上用 `before`/`sha`。CI 通过 `SRS_IMAGE`、
+`REDIS_IMAGE`、`CADDY_IMAGE` 覆盖 Compose 默认的 `docker.m.daocloud.io` 前缀。
+
+本地等价命令：
+
+```bash
+pnpm install --frozen-lockfile
+(cd apps/ai-worker && uv sync --all-groups --frozen)
+pnpm exec nx affected -t build test typecheck
+pnpm exec playwright install chromium
+pnpm exec nx run web:e2e
+pnpm lint
+```
+
 ## 契约
 
 `libs/contracts` 是跨语言 payload 的唯一来源：

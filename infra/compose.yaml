@@ -2,7 +2,7 @@ name: live-stream-lab
 
 services:
   srs:
-    image: docker.m.daocloud.io/ossrs/srs:v6.0-r2
+    image: ${SRS_IMAGE:-docker.m.daocloud.io/ossrs/srs:v6.0-r2}
     container_name: lsl-srs
     restart: unless-stopped
     command: ["./objs/srs", "-c", "conf/srs.conf"]
@@ -27,7 +27,7 @@ services:
       start_period: 5s
 
   redis:
-    image: docker.m.daocloud.io/library/redis:7-alpine
+    image: ${REDIS_IMAGE:-docker.m.daocloud.io/library/redis:7-alpine}
     container_name: lsl-redis
     restart: unless-stopped
     ports:
@@ -41,7 +41,7 @@ services:
       start_period: 2s
 
   caddy:
-    image: docker.m.daocloud.io/library/caddy:2-alpine
+    image: ${CADDY_IMAGE:-docker.m.daocloud.io/library/caddy:2-alpine}
     container_name: lsl-caddy
     restart: unless-stopped
     ports:

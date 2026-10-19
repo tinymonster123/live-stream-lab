@@ -19,7 +19,8 @@ Canonical records live in `docs/adr/`. This file is the index and the open-quest
 - Real-time captions: after the post-meeting AI pipeline.
 - Public internet / TURN: later; LAN only for now.
 - Recording retention: 7 days or 50GB, first to delete; confirm during implementation.
-- Observability and CI: not yet decided.
+- Observability: not yet decided.
+- CI baseline: `.github/workflows/ci.yml` (T2).
 - Real SRS Compose image and health check: verify with `ossrs/srs:6`.
 
 ## Milestones
