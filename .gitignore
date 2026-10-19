@@ -4,3 +4,13 @@ node_modules/
 dist/
 data/
 prototype/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Go
+apps/control-plane/control-plane

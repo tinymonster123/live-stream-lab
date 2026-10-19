@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://live-stream-lab.local/schemas/transcript.json",
+  "title": "Transcript",
+  "description": "A timestamped, speaker-attributed text Artifact. The segment shape also supports real-time captions later.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["language", "model", "segments"],
+  "properties": {
+    "language": { "type": "string" },
+    "model": { "type": "string" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["startMs", "endMs", "participantId", "text"],
+        "properties": {
+          "startMs": { "type": "integer", "minimum": 0 },
+          "endMs": { "type": "integer", "minimum": 0 },
+          "participantId": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    }
+  }
+}

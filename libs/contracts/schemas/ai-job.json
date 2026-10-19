@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://live-stream-lab.local/schemas/ai-job.json",
+  "title": "AI Job",
+  "description": "A unit of work that turns a Recording into Artifacts. The idempotency key is meetingId + recordingId.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "jobId",
+    "meetingId",
+    "recordingId",
+    "recordingTracks",
+    "language",
+    "model",
+    "createdAt"
+  ],
+  "properties": {
+    "jobId": { "type": "string" },
+    "meetingId": { "type": "string" },
+    "recordingId": { "type": "string" },
+    "recordingTracks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId", "path"],
+        "properties": {
+          "participantId": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      }
+    },
+    "language": { "type": "string", "default": "auto" },
+    "model": { "type": "string", "default": "mlx-whisper" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

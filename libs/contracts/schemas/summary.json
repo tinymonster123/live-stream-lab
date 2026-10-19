@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://live-stream-lab.local/schemas/summary.json",
+  "title": "Summary",
+  "description": "A condensed text Artifact derived from a Transcript. Action items are a later extension.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["text", "keyPoints"],
+  "properties": {
+    "text": { "type": "string" },
+    "keyPoints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" }
+  }
+}

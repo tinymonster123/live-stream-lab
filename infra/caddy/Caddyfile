@@ -1,0 +1,8 @@
+{
+	admin 0.0.0.0:2019
+}
+
+# T1 placeholder. HTTPS with an internal CA and SRS/control-plane routing land with M2.
+:80 {
+	respond "live-stream-lab caddy ok" 200
+}

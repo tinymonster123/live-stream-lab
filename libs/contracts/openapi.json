@@ -1,0 +1,710 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Live Stream Lab Control Plane API",
+    "version": "0.1.0",
+    "description": "HTTP and WebSocket contract between the Web client and the Go control plane. The media plane (SRS) is reached through the URLs returned by these operations."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8081",
+      "description": "Native Go control plane"
+    }
+  ],
+  "tags": [
+    { "name": "health" },
+    { "name": "broadcasts" },
+    { "name": "meetings" },
+    { "name": "recordings" },
+    { "name": "artifacts" }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": ["health"],
+        "operationId": "getHealth",
+        "summary": "Report control-plane health",
+        "responses": {
+          "200": {
+            "description": "The control plane is running",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/broadcasts": {
+      "post": {
+        "tags": ["broadcasts"],
+        "operationId": "createBroadcast",
+        "summary": "Create a Broadcast session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BroadcastCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Broadcast created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BroadcastSession" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/v1/broadcasts/{broadcastId}": {
+      "get": {
+        "tags": ["broadcasts"],
+        "operationId": "getBroadcast",
+        "summary": "Get Broadcast status",
+        "parameters": [{ "$ref": "#/components/parameters/BroadcastId" }],
+        "responses": {
+          "200": {
+            "description": "Broadcast status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BroadcastSession" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/broadcasts/{broadcastId}/start": {
+      "post": {
+        "tags": ["broadcasts"],
+        "operationId": "startBroadcast",
+        "summary": "Start a Broadcast",
+        "parameters": [{ "$ref": "#/components/parameters/BroadcastId" }],
+        "responses": {
+          "200": {
+            "description": "Broadcast started",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BroadcastSession" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/api/v1/broadcasts/{broadcastId}/stop": {
+      "post": {
+        "tags": ["broadcasts"],
+        "operationId": "stopBroadcast",
+        "summary": "Stop a Broadcast",
+        "parameters": [{ "$ref": "#/components/parameters/BroadcastId" }],
+        "responses": {
+          "200": {
+            "description": "Broadcast stopped",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BroadcastSession" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/api/v1/meetings": {
+      "post": {
+        "tags": ["meetings"],
+        "operationId": "createMeeting",
+        "summary": "Create a Meeting",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MeetingCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Meeting created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MeetingCreated" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/api/v1/rooms/{roomCode}/join": {
+      "post": {
+        "tags": ["meetings"],
+        "operationId": "joinRoom",
+        "summary": "Join a Room with a Room Code",
+        "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RoomJoinRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Join grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JoinGrant" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/rooms/{roomCode}/leave": {
+      "post": {
+        "tags": ["meetings"],
+        "operationId": "leaveRoom",
+        "summary": "Leave a Room",
+        "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RoomLeaveRequest" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Left the Room" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/rooms/{roomCode}": {
+      "get": {
+        "tags": ["meetings"],
+        "operationId": "getRoomStatus",
+        "summary": "Get Room status and Roster",
+        "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
+        "responses": {
+          "200": {
+            "description": "Room status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RoomStatus" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/recordings": {
+      "get": {
+        "tags": ["recordings"],
+        "operationId": "listRecordings",
+        "summary": "List Recordings",
+        "responses": {
+          "200": {
+            "description": "Recording list",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RecordingList" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recordings/{recordingId}": {
+      "get": {
+        "tags": ["recordings"],
+        "operationId": "getRecording",
+        "summary": "Get a Recording",
+        "parameters": [{ "$ref": "#/components/parameters/RecordingId" }],
+        "responses": {
+          "200": {
+            "description": "Recording",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Recording" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/recordings/{recordingId}/artifacts": {
+      "get": {
+        "tags": ["artifacts"],
+        "operationId": "listArtifacts",
+        "summary": "List Artifacts attached to a Recording",
+        "parameters": [{ "$ref": "#/components/parameters/RecordingId" }],
+        "responses": {
+          "200": {
+            "description": "Artifact list",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArtifactList" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["health"],
+        "operationId": "getMetrics",
+        "summary": "Prometheus-style metrics",
+        "responses": {
+          "200": {
+            "description": "Metrics in text exposition format",
+            "content": {
+              "text/plain": {
+                "schema": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "BroadcastId": {
+        "name": "broadcastId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      },
+      "RoomCode": {
+        "name": "roomCode",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      },
+      "RecordingId": {
+        "name": "recordingId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request is invalid",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The Join Token is missing, expired, or not valid for this Room",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The resource does not exist",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The resource is not in a state that allows this operation",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "LatencyClass": {
+        "type": "string",
+        "description": "Product-level latency target. The implementation maps it to a playback protocol.",
+        "enum": ["ultra-low", "low", "standard"]
+      },
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "service"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok"] },
+          "service": { "type": "string", "const": "control-plane" },
+          "version": { "type": "string" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      },
+      "PublishDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rtmpUrl", "streamKey"],
+        "properties": {
+          "rtmpUrl": { "type": "string", "description": "RTMP ingest URL for FFmpeg or OBS" },
+          "streamKey": { "type": "string" },
+          "whipUrl": { "type": "string", "description": "WHIP endpoint for browser publishing" }
+        }
+      },
+      "PlaybackDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol", "url", "expiresAt"],
+        "properties": {
+          "protocol": { "type": "string", "enum": ["hls", "flv", "whep"] },
+          "url": { "type": "string" },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Unix epoch milliseconds after which the URL is no longer valid"
+          }
+        }
+      },
+      "BroadcastCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "latencyClass"],
+        "properties": {
+          "source": { "$ref": "#/components/schemas/BroadcastSource" },
+          "latencyClass": { "$ref": "#/components/schemas/LatencyClass" }
+        }
+      },
+      "BroadcastSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["camera", "screen", "file"] },
+          "path": { "type": "string", "description": "Required when type is file" }
+        }
+      },
+      "BroadcastSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["broadcastId", "status", "latencyClass", "publish", "playback", "viewerCount"],
+        "properties": {
+          "broadcastId": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["idle", "starting", "live", "stopping", "stopped", "failed"]
+          },
+          "latencyClass": { "$ref": "#/components/schemas/LatencyClass" },
+          "publish": { "$ref": "#/components/schemas/PublishDescriptor" },
+          "playback": { "$ref": "#/components/schemas/PlaybackDescriptor" },
+          "viewerCount": { "type": "integer", "minimum": 0 },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "stoppedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "MeetingCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hostDisplayName"],
+        "properties": {
+          "hostDisplayName": { "type": "string", "minLength": 1 }
+        }
+      },
+      "MeetingCreated": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meetingId", "roomCode", "joinToken", "expiresAt"],
+        "properties": {
+          "meetingId": { "type": "string" },
+          "roomCode": { "type": "string" },
+          "joinToken": { "type": "string" },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "RoomJoinRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["displayName"],
+        "properties": {
+          "displayName": { "type": "string", "minLength": 1 },
+          "participantId": {
+            "type": "string",
+            "description": "Reuse an existing participantId to rejoin after a network drop"
+          }
+        }
+      },
+      "JoinGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId", "joinToken", "publishUrl", "subscriptions"],
+        "properties": {
+          "participantId": { "type": "string" },
+          "joinToken": { "type": "string" },
+          "publishUrl": { "type": "string", "description": "WHIP endpoint for this Participant" },
+          "subscriptions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SubscriptionTarget" }
+          }
+        }
+      },
+      "SubscriptionTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId", "trackId", "whepUrl"],
+        "properties": {
+          "participantId": { "type": "string" },
+          "trackId": { "type": "string" },
+          "whepUrl": { "type": "string" }
+        }
+      },
+      "RoomLeaveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId"],
+        "properties": {
+          "participantId": { "type": "string" }
+        }
+      },
+      "RoomStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["roomCode", "state", "participants"],
+        "properties": {
+          "roomCode": { "type": "string" },
+          "state": { "type": "string", "enum": ["open", "closing", "closed"] },
+          "participants": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/RosterEntry" }
+          }
+        }
+      },
+      "RosterEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId", "displayName", "role", "tracks"],
+        "properties": {
+          "participantId": { "type": "string" },
+          "displayName": { "type": "string" },
+          "role": { "type": "string", "enum": ["host", "guest"] },
+          "muted": { "type": "boolean" },
+          "tracks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/TrackSummary" }
+          }
+        }
+      },
+      "TrackSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trackId", "kind"],
+        "properties": {
+          "trackId": { "type": "string" },
+          "kind": { "type": "string", "enum": ["audio", "video"] },
+          "published": { "type": "boolean" }
+        }
+      },
+      "RecordingList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recordings"],
+        "properties": {
+          "recordings": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Recording" }
+          }
+        }
+      },
+      "Recording": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recordingId", "meetingId", "state", "tracks", "timeline"],
+        "properties": {
+          "recordingId": { "type": "string" },
+          "meetingId": { "type": "string" },
+          "state": { "type": "string", "enum": ["recording", "finalizing", "ready", "failed"] },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "endedAt": { "type": "string", "format": "date-time" },
+          "tracks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/RecordingTrack" }
+          },
+          "timeline": {
+            "type": "array",
+            "description": "Room events captured alongside the Recording Tracks",
+            "items": { "$ref": "#/components/schemas/RoomEvent" }
+          }
+        }
+      },
+      "RoomEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "type"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "type": {
+            "type": "string",
+            "enum": [
+              "participant.joined",
+              "participant.left",
+              "track.published",
+              "track.unpublished",
+              "mute.changed"
+            ]
+          },
+          "participantId": { "type": "string" },
+          "trackId": { "type": "string" }
+        }
+      },
+      "RecordingTrack": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId", "path"],
+        "properties": {
+          "participantId": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      },
+      "ArtifactList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifacts"],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ArtifactSummary" }
+          }
+        }
+      },
+      "ArtifactSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifactId", "recordingId", "kind", "createdAt"],
+        "properties": {
+          "artifactId": { "type": "string" },
+          "recordingId": { "type": "string" },
+          "kind": { "type": "string", "enum": ["transcript", "summary"] },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "WsEvent": {
+        "description": "Server-to-client Room event envelope",
+        "oneOf": [
+          { "$ref": "#/components/schemas/ParticipantJoinedEvent" },
+          { "$ref": "#/components/schemas/ParticipantLeftEvent" },
+          { "$ref": "#/components/schemas/TrackPublishedEvent" },
+          { "$ref": "#/components/schemas/TrackUnpublishedEvent" },
+          { "$ref": "#/components/schemas/MuteChangedEvent" },
+          { "$ref": "#/components/schemas/RecordingStateChangedEvent" },
+          { "$ref": "#/components/schemas/AiJobStateChangedEvent" }
+        ]
+      },
+      "ParticipantJoinedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "participantId", "displayName", "role"],
+        "properties": {
+          "type": { "const": "participant.joined" },
+          "participantId": { "type": "string" },
+          "displayName": { "type": "string" },
+          "role": { "type": "string", "enum": ["host", "guest"] }
+        }
+      },
+      "ParticipantLeftEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "participantId"],
+        "properties": {
+          "type": { "const": "participant.left" },
+          "participantId": { "type": "string" }
+        }
+      },
+      "TrackPublishedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "participantId", "trackId", "kind"],
+        "properties": {
+          "type": { "const": "track.published" },
+          "participantId": { "type": "string" },
+          "trackId": { "type": "string" },
+          "kind": { "type": "string", "enum": ["audio", "video"] }
+        }
+      },
+      "TrackUnpublishedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "participantId", "trackId"],
+        "properties": {
+          "type": { "const": "track.unpublished" },
+          "participantId": { "type": "string" },
+          "trackId": { "type": "string" }
+        }
+      },
+      "MuteChangedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "participantId", "muted"],
+        "properties": {
+          "type": { "const": "mute.changed" },
+          "participantId": { "type": "string" },
+          "muted": { "type": "boolean" }
+        }
+      },
+      "RecordingStateChangedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "recordingId", "state"],
+        "properties": {
+          "type": { "const": "recording.state_changed" },
+          "recordingId": { "type": "string" },
+          "state": { "type": "string", "enum": ["recording", "finalizing", "ready", "failed"] }
+        }
+      },
+      "AiJobStateChangedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "jobId", "state"],
+        "properties": {
+          "type": { "const": "ai_job.state_changed" },
+          "jobId": { "type": "string" },
+          "state": {
+            "type": "string",
+            "enum": ["queued", "running", "succeeded", "failed"]
+          }
+        }
+      }
+    }
+  },
+  "x-websocket": {
+    "path": "/api/v1/rooms/{roomCode}/ws",
+    "queryParameters": {
+      "joinToken": { "type": "string", "required": true }
+    },
+    "description": "Room signaling channel. The client sends heartbeats and subscription changes; the server pushes WsEvent messages. SDP is exchanged through WHIP/WHEP, not here.",
+    "messageSchema": { "$ref": "#/components/schemas/WsEvent" }
+  }
+}

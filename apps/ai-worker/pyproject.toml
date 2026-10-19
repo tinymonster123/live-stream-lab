@@ -1,0 +1,27 @@
+[project]
+name = "ai-worker"
+version = "0.0.0"
+description = "Native AI worker that turns Recordings into Transcripts and Summaries"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.4.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_worker"]
+
+# pypi.org is not reachable from the development network. Override with
+# UV_DEFAULT_INDEX on networks where the upstream index works.
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

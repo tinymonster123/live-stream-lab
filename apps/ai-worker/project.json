@@ -1,0 +1,29 @@
+{
+  "name": "ai-worker",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "root": "apps/ai-worker",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv build",
+        "cwd": "apps/ai-worker"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen python -m ai_worker",
+        "cwd": "apps/ai-worker"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen pytest",
+        "cwd": "apps/ai-worker"
+      }
+    }
+  }
+}

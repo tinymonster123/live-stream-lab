@@ -1,0 +1,67 @@
+name: live-stream-lab
+
+services:
+  srs:
+    image: docker.m.daocloud.io/ossrs/srs:v6.0-r2
+    container_name: lsl-srs
+    restart: unless-stopped
+    command: ["./objs/srs", "-c", "conf/srs.conf"]
+    environment:
+      CANDIDATE: ${SRS_CANDIDATE:-127.0.0.1}
+    ports:
+      - "1935:1935" # RTMP ingest
+      - "1985:1985" # HTTP API
+      - "8080:8080" # HTTP-FLV / HLS
+      - "8000:8000/udp" # WebRTC
+    volumes:
+      - ./srs/srs.conf:/usr/local/srs/conf/srs.conf:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/1935 && exec 4<>/dev/tcp/127.0.0.1/1985 && exec 5<>/dev/tcp/127.0.0.1/8080'",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7-alpine
+    container_name: lsl-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 2s
+
+  caddy:
+    image: docker.m.daocloud.io/library/caddy:2-alpine
+    container_name: lsl-caddy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2019:2019" # admin API, host-only
+      - "8088:80" # HTTP entry point
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost/ && wget -q --spider http://localhost:2019/config/",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+
+volumes:
+  caddy_data:
+  caddy_config:

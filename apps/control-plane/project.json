@@ -1,0 +1,29 @@
+{
+  "name": "control-plane",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "root": "apps/control-plane",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go build -o dist/control-plane .",
+        "cwd": "apps/control-plane"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go run .",
+        "cwd": "apps/control-plane"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go test ./...",
+        "cwd": "apps/control-plane"
+      }
+    }
+  }
+}
