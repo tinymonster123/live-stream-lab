@@ -80,8 +80,10 @@ curl -s localhost:8081/api/v1/broadcasts/<broadcastId>
 curl -s -X POST localhost:8081/api/v1/broadcasts/<broadcastId>/stop
 ```
 
-控制面返回的 `playback.url` 形如 `http://127.0.0.1:8080/live/<streamKey>.flv`，浏览器用
-`mpegts.js` 播放。也可以把 `publish.rtmpUrl` 和 `publish.streamKey` 交给 OBS 或其他 FFmpeg。
+控制面返回的 `playback` 是一个有序策略：`protocol` 和 `url` 是首选协议，`fallbacks` 是备选。
+`low` 返回 HTTP-FLV 首选、HLS 备选；`standard` 只返回 HLS。Web 播放器按顺序尝试自己能播放的协议
+（HTTP-FLV 用 `mpegts.js`，HLS 用 Safari 原生支持），因此不需要服务端猜测客户端能力。也可以把
+`publish.rtmpUrl` 和 `publish.streamKey` 交给 OBS 或其他 FFmpeg。
 
 `source.type`：
 
@@ -91,7 +93,27 @@ curl -s -X POST localhost:8081/api/v1/broadcasts/<broadcastId>/stop
 `start` 会等待 SRS API 报告该 Stream 处于 publishing 状态后才返回 `live`；等待超时会结束 FFmpeg
 并把状态置为 `failed`。文件源必须是 H.264/AAC（控制面用 `-c copy`）。
 
-T3 只实现 `latencyClass: "low"`（HTTP-FLV）。`ultra-low`（WHEP）在 T6，`standard`（HLS）在 T4。
+`ultra-low`（WHEP）尚未实现，创建时返回 400；它在 T6 落地。
+
+### HLS
+
+SRS 的 HLS 在 `infra/srs/srs.conf` 的 `hls` 块开启，播放地址形如
+`http://127.0.0.1:8080/live/<streamKey>.m3u8`。分片边界跟随关键帧，`hls_fragment` 只是上限；
+`hls_cleanup on` 在直播中删除过期分片，`hls_dispose 60` 在停播 60 秒后删除该 Stream 的全部分片和
+播放列表。分片写在容器内的 `./objs/nginx/html`，不挂载到宿主机，容器重建即清空。
+
+Safari 用原生 HLS 播放；Chrome/Firefox 需要 MSE 版 HLS 库，暂不支持（会显示播放错误）。
+
+回退发生在首选协议无法启动时（HTTP-FLV 5 秒内没有画面、或 HLS 10 秒内没有元数据）。已经起播后
+掉流只显示播放错误，由状态轮询与 Offline 状态接管，不做自动重连。
+
+### Viewer count 与状态
+
+`GET /api/v1/broadcasts/{broadcastId}` 返回 `status` 和 `viewerCount`。`viewerCount` 来自 SRS
+`/api/v1/streams/` 的 `clients` 字段，只在 `live` 时按需查询；查询失败时保留上一次的已知值，
+不阻塞 `start`/`stop`。SRS 把发布者也计入 `clients`，控制面会减掉它；剩下的仍是连接数（一次
+HLS 播放会打开多个连接），不是去重后的观众人数。Web 端在 `starting`/`live`/`stopping` 期间每 3
+秒轮询一次，停播或失败后显示 Offline 状态并销毁播放器。
 
 ### 验收脚本
 
@@ -109,10 +131,11 @@ scripts/soak-broadcast.sh /tmp/fixture.mp4               # 默认 600 秒
 | `CONTROL_PLANE_ADDR` | `:8081` | HTTP 监听地址 |
 | `SRS_RTMP_BASE` | `rtmp://127.0.0.1:1935/live` | 推流基地址 |
 | `SRS_FLV_BASE` | `http://127.0.0.1:8080/live` | HTTP-FLV 播放基地址 |
-| `SRS_API_BASE` | `http://127.0.0.1:1985` | 用于确认 Stream 已开始推流的 SRS HTTP API；设为空可跳过确认 |
+| `SRS_HLS_BASE` | `http://127.0.0.1:8080/live` | HLS 播放基地址 |
+| `SRS_API_BASE` | `http://127.0.0.1:1985` | SRS HTTP API：确认 Stream 已开始推流、踢掉发布者、查询观众数；设为空可跳过确认 |
 | `FFMPEG_BIN` | `ffmpeg` | FFmpeg 可执行文件 |
 
-局域网观看时，把 `SRS_FLV_BASE` 改成 `http://<Mac LAN IP>:8080/live` 并设置
+局域网观看时，把 `SRS_FLV_BASE`、`SRS_HLS_BASE` 改成 `http://<Mac LAN IP>:8080/live` 并设置
 `SRS_CANDIDATE=<Mac LAN IP>`。
 
 ## 原生应用

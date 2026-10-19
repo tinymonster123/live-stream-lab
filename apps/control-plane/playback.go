@@ -7,22 +7,46 @@ import (
 )
 
 // resolvePlayback owns protocol selection. Callers only consume the descriptor.
-// T3 implements the low latency class; HLS and WHEP arrive with T4 and T6.
-func resolvePlayback(streamID string, latencyClass LatencyClass, flvBase string, now time.Time) (PlaybackDescriptor, error) {
-	if latencyClass != Low {
+//
+// The descriptor is an ordered policy: the primary protocol plus fallbacks the
+// player may try when the primary cannot start. Ordering lives here so callers
+// never learn protocol names; the player still makes the final choice because
+// only it knows what the current browser can actually attempt.
+func resolvePlayback(
+	streamID string,
+	latencyClass LatencyClass,
+	config ServiceConfig,
+	now time.Time,
+) (PlaybackDescriptor, error) {
+	expiresAt := int(now.Add(time.Hour).UnixMilli())
+
+	switch latencyClass {
+	case Low:
+		return PlaybackDescriptor{
+			Protocol:  Flv,
+			Url:       joinURL(config.FLVBase, streamID+".flv"),
+			ExpiresAt: expiresAt,
+			Fallbacks: []PlaybackDescriptor{{
+				Protocol:  Hls,
+				Url:       joinURL(config.HLSBase, streamID+".m3u8"),
+				ExpiresAt: expiresAt,
+				Fallbacks: []PlaybackDescriptor{},
+			}},
+		}, nil
+	case Standard:
+		return PlaybackDescriptor{
+			Protocol:  Hls,
+			Url:       joinURL(config.HLSBase, streamID+".m3u8"),
+			ExpiresAt: expiresAt,
+			Fallbacks: []PlaybackDescriptor{},
+		}, nil
+	default:
 		return PlaybackDescriptor{}, fmt.Errorf(
-			"%w: %q (only low/HTTP-FLV is implemented)",
+			"%w: %q is not implemented until WHEP lands",
 			ErrUnsupportedLatency,
 			latencyClass,
 		)
 	}
-
-	return PlaybackDescriptor{
-		Protocol: Flv,
-		Url:      joinURL(flvBase, streamID+".flv"),
-		// URLs are not signed yet; the expiry is advisory until Playback owns tokens.
-		ExpiresAt: int(now.Add(time.Hour).UnixMilli()),
-	}, nil
 }
 
 func joinURL(base, path string) string {

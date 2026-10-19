@@ -381,13 +381,18 @@
       "PlaybackDescriptor": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["protocol", "url", "expiresAt"],
+        "required": ["protocol", "url", "expiresAt", "fallbacks"],
         "properties": {
           "protocol": { "type": "string", "enum": ["hls", "flv", "whep"] },
           "url": { "type": "string" },
           "expiresAt": {
             "type": "integer",
             "description": "Unix epoch milliseconds after which the URL is no longer valid"
+          },
+          "fallbacks": {
+            "type": "array",
+            "description": "Ordered alternates the player may try when the primary protocol cannot start. The player chooses based on what it can actually play; the server owns the order.",
+            "items": { "$ref": "#/components/schemas/PlaybackDescriptor" }
           }
         }
       },

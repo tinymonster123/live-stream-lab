@@ -354,7 +354,10 @@ type MeetingCreated struct {
 // PlaybackDescriptor defines model for PlaybackDescriptor.
 type PlaybackDescriptor struct {
 	// ExpiresAt Unix epoch milliseconds after which the URL is no longer valid
-	ExpiresAt int                        `json:"expiresAt"`
+	ExpiresAt int `json:"expiresAt"`
+
+	// Fallbacks Ordered alternates the player may try when the primary protocol cannot start. The player chooses based on what it can actually play; the server owns the order.
+	Fallbacks []PlaybackDescriptor       `json:"fallbacks"`
 	Protocol  PlaybackDescriptorProtocol `json:"protocol"`
 	Url       string                     `json:"url"`
 }

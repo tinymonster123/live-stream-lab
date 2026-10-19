@@ -10,6 +10,7 @@ type appConfig struct {
 	Addr       string
 	RTMPBase   string
 	FLVBase    string
+	HLSBase    string
 	SRSAPIBase string
 	FFmpegBin  string
 }
@@ -19,6 +20,7 @@ func configFromEnv() appConfig {
 		Addr:       envOrDefault("CONTROL_PLANE_ADDR", ":8081"),
 		RTMPBase:   envOrDefault("SRS_RTMP_BASE", "rtmp://127.0.0.1:1935/live"),
 		FLVBase:    envOrDefault("SRS_FLV_BASE", "http://127.0.0.1:8080/live"),
+		HLSBase:    envOrDefault("SRS_HLS_BASE", "http://127.0.0.1:8080/live"),
 		SRSAPIBase: envAllowEmpty("SRS_API_BASE", "http://127.0.0.1:1985"),
 		FFmpegBin:  envOrDefault("FFMPEG_BIN", "ffmpeg"),
 	}
@@ -50,7 +52,11 @@ func main() {
 	service := NewBroadcastService(
 		ExecRunner{Bin: config.FFmpegBin},
 		probe,
-		ServiceConfig{RTMPBase: config.RTMPBase, FLVBase: config.FLVBase},
+		ServiceConfig{
+			RTMPBase: config.RTMPBase,
+			FLVBase:  config.FLVBase,
+			HLSBase:  config.HLSBase,
+		},
 	)
 
 	server := &http.Server{Addr: config.Addr, Handler: newMux(service)}

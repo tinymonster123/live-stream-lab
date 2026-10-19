@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-# Verifies the Broadcast vertical slice stays live and keeps producing HTTP-FLV.
+# Verifies the Broadcast vertical slice stays live, keeps producing HTTP-FLV,
+# and packs the HLS fallback.
 # Requires: infra up, control plane running, FFmpeg installed, H.264/AAC source.
 #
 #   DURATION=10 scripts/soak-broadcast.sh /tmp/fixture.mp4   # quick smoke
@@ -22,9 +23,13 @@ created=$(curl -sf -X POST "$API/api/v1/broadcasts" \
 
 id=$(printf '%s' "$created" | json_field broadcastId)
 playback=$(printf '%s' "$created" | node -e 'const body = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(body.playback.url)')
+fallback=$(printf '%s' "$created" | node -e 'const body = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(body.playback.fallbacks?.[0]?.url ?? "")')
 
 echo "broadcast $id"
 echo "playback $playback"
+if [ -n "$fallback" ]; then
+  echo "fallback $fallback"
+fi
 
 curl -sf -X POST "$API/api/v1/broadcasts/$id/start" >/dev/null
 echo "live; checking every ${INTERVAL}s for ${DURATION}s"
@@ -42,6 +47,16 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ "$header" != "FLV" ]; then
     echo "FAIL: no HTTP-FLV data after $checks checks"
     exit 1
+  fi
+
+  # HLS needs the first keyframe before the playlist appears; skip the
+  # immediate first check and require it once playback is warm.
+  if [ -n "$fallback" ] && [ "$checks" -ge 2 ]; then
+    playlist=$(curl -s --max-time 3 "$fallback" 2>/dev/null | head -c 7)
+    if [ "$playlist" != "#EXTM3U" ]; then
+      echo "FAIL: no HLS playlist after $checks checks"
+      exit 1
+    fi
   fi
 
   checks=$((checks + 1))

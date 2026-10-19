@@ -15,6 +15,7 @@ const (
 	stopTimeout      = 5 * time.Second
 	ingestTimeout    = 5 * time.Second
 	unpublishTimeout = 2 * time.Second
+	viewerTimeout    = time.Second
 )
 
 var (
@@ -26,6 +27,7 @@ var (
 type ServiceConfig struct {
 	RTMPBase string
 	FLVBase  string
+	HLSBase  string
 }
 
 type broadcastSession struct {
@@ -37,6 +39,7 @@ type broadcastSession struct {
 	publish      PublishDescriptor
 	playback     PlaybackDescriptor
 	process      Process
+	viewerCount  int
 	startedAt    *time.Time
 	stoppedAt    *time.Time
 }
@@ -48,7 +51,7 @@ func (session *broadcastSession) snapshotLocked() BroadcastSession {
 		LatencyClass: session.latencyClass,
 		Publish:      session.publish,
 		Playback:     session.playback,
-		ViewerCount:  0,
+		ViewerCount:  session.viewerCount,
 	}
 	if session.startedAt != nil {
 		startedAt := *session.startedAt
@@ -88,7 +91,7 @@ func (service *BroadcastService) Create(spec BroadcastCreateRequest) (BroadcastS
 	}
 
 	id := service.newID()
-	playback, err := resolvePlayback(id, spec.LatencyClass, service.config.FLVBase, service.now())
+	playback, err := resolvePlayback(id, spec.LatencyClass, service.config, service.now())
 	if err != nil {
 		return BroadcastSession{}, err
 	}
@@ -191,9 +194,13 @@ func (service *BroadcastService) Stop(id string) (BroadcastSession, error) {
 	stoppedAt := service.now()
 	session.status = BroadcastSessionStatusStopped
 	session.stoppedAt = &stoppedAt
+	session.viewerCount = 0
 	return session.snapshotLocked(), nil
 }
 
+// Status returns the in-memory snapshot and, while live, refreshes the viewer
+// count from the media plane. The media-plane call happens outside the lock so
+// a slow SRS does not block start/stop.
 func (service *BroadcastService) Status(id string) (BroadcastSession, error) {
 	session, err := service.session(id)
 	if err != nil {
@@ -201,8 +208,34 @@ func (service *BroadcastService) Status(id string) (BroadcastSession, error) {
 	}
 
 	session.mu.Lock()
+	snapshot := session.snapshotLocked()
+	session.mu.Unlock()
+
+	if snapshot.Status != BroadcastSessionStatusLive || service.probe == nil {
+		return snapshot, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), viewerTimeout)
+	defer cancel()
+
+	count, err := service.probe.ViewerCount(ctx, session.id)
+	if err != nil {
+		log.Printf("broadcast %s: viewer count: %v", session.id, err)
+		return snapshot, nil
+	}
+
+	session.mu.Lock()
 	defer session.mu.Unlock()
-	return session.snapshotLocked(), nil
+
+	// The Broadcast may have stopped while the media plane was answering.
+	// Never apply a stale count to a terminal state.
+	if session.status != BroadcastSessionStatusLive {
+		return session.snapshotLocked(), nil
+	}
+
+	session.viewerCount = count
+	snapshot.ViewerCount = count
+	return snapshot, nil
 }
 
 func (service *BroadcastService) session(id string) (*broadcastSession, error) {
@@ -236,6 +269,7 @@ func (service *BroadcastService) watch(session *broadcastSession, process Proces
 	session.status = BroadcastSessionStatusFailed
 	stoppedAt := service.now()
 	session.stoppedAt = &stoppedAt
+	session.viewerCount = 0
 }
 
 func validateSpec(spec BroadcastCreateRequest) error {

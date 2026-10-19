@@ -13,7 +13,12 @@ const session: BroadcastSession = {
   status: "idle",
   latencyClass: "low",
   publish: { rtmpUrl: "rtmp://127.0.0.1:1935/live", streamKey: "b1" },
-  playback: { protocol: "flv", url: "http://127.0.0.1:8080/live/b1.flv", expiresAt: 1 },
+  playback: {
+    protocol: "flv",
+    url: "http://127.0.0.1:8080/live/b1.flv",
+    expiresAt: 1,
+    fallbacks: [],
+  },
   viewerCount: 0,
 };
 

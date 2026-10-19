@@ -94,6 +94,50 @@ func TestBroadcastLifecycleEndpoints(t *testing.T) {
 	}
 }
 
+func TestCreateBroadcastWithStandardLatencyReturnsHLS(t *testing.T) {
+	mux := newMux(newTestService(&fakeRunner{}))
+	body := `{"source":{"type":"file","path":"/tmp/fixture.mp4"},"latencyClass":"standard"}`
+
+	recorder := performRequest(t, mux, http.MethodPost, "/api/v1/broadcasts", body)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body %s)", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+	session := decodeSession(t, recorder)
+	if session.Playback.Protocol != Hls {
+		t.Fatalf("protocol = %q, want hls", session.Playback.Protocol)
+	}
+	if len(session.Playback.Fallbacks) != 0 {
+		t.Fatalf("fallbacks = %+v, want none", session.Playback.Fallbacks)
+	}
+}
+
+func TestGetBroadcastReportsViewerCount(t *testing.T) {
+	probe := &fakeProbe{viewers: 5}
+	mux := newMux(NewBroadcastService(&fakeRunner{}, probe, testConfig()))
+	created := decodeSession(t, performRequest(
+		t, mux, http.MethodPost, "/api/v1/broadcasts",
+		`{"source":{"type":"file","path":"/tmp/fixture.mp4"},"latencyClass":"low"}`,
+	))
+	path := "/api/v1/broadcasts/" + created.BroadcastId
+
+	if recorder := performRequest(t, mux, http.MethodPost, path+"/start", ""); recorder.Code != http.StatusOK {
+		t.Fatalf("start status = %d (body %s)", recorder.Code, recorder.Body.String())
+	}
+
+	status := performRequest(t, mux, http.MethodGet, path, "")
+	if status.Code != http.StatusOK {
+		t.Fatalf("status code = %d", status.Code)
+	}
+	session := decodeSession(t, status)
+	if session.ViewerCount != 5 {
+		t.Fatalf("viewerCount = %d, want 5", session.ViewerCount)
+	}
+	if session.Status != BroadcastSessionStatusLive {
+		t.Fatalf("status = %q, want live", session.Status)
+	}
+}
+
 func TestUnknownBroadcastReturnsNotFound(t *testing.T) {
 	mux := newMux(newTestService(&fakeRunner{}))
 
@@ -118,7 +162,7 @@ func TestInvalidCreateRequestReturnsBadRequest(t *testing.T) {
 
 	for _, body := range []string{
 		`{`,
-		`{"source":{"type":"file","path":"/tmp/a.mp4"},"latencyClass":"standard"}`,
+		`{"source":{"type":"file","path":"/tmp/a.mp4"},"latencyClass":"ultra-low"}`,
 		`{"source":{"type":"file"},"latencyClass":"low"}`,
 	} {
 		recorder := performRequest(t, mux, http.MethodPost, "/api/v1/broadcasts", body)

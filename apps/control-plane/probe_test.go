@@ -51,6 +51,69 @@ func TestSRSProbeReportsAPIError(t *testing.T) {
 	}
 }
 
+func TestSRSProbeReportsViewerCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(writer, `{"code":0,"streams":[
+			{"name":"other","clients":99,"publish":{"active":true}},
+			{"name":"b1","clients":4,"publish":{"active":true}}
+		]}`)
+	}))
+	defer server.Close()
+
+	probe := NewSRSProbe(server.URL)
+	count, err := probe.ViewerCount(context.Background(), "b1")
+	if err != nil {
+		t.Fatalf("ViewerCount: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("viewers = %d, want 3 (SRS counts the publisher too)", count)
+	}
+}
+
+func TestSRSProbeViewerCountIgnoresThePublisher(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(writer, `{"code":0,"streams":[{"name":"b1","clients":1,"publish":{"active":true}}]}`)
+	}))
+	defer server.Close()
+
+	probe := NewSRSProbe(server.URL)
+	count, err := probe.ViewerCount(context.Background(), "b1")
+	if err != nil {
+		t.Fatalf("ViewerCount: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("viewers = %d, want 0 with only the publisher connected", count)
+	}
+}
+
+func TestSRSProbeViewerCountIsZeroForMissingStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(writer, `{"code":0,"streams":[]}`)
+	}))
+	defer server.Close()
+
+	probe := NewSRSProbe(server.URL)
+	count, err := probe.ViewerCount(context.Background(), "b1")
+	if err != nil {
+		t.Fatalf("ViewerCount: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("viewers = %d, want 0", count)
+	}
+}
+
+func TestSRSProbeViewerCountReportsAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	probe := NewSRSProbe(server.URL)
+	if _, err := probe.ViewerCount(context.Background(), "b1"); err == nil {
+		t.Fatal("ViewerCount succeeded, want an SRS API error")
+	}
+}
+
 func TestSRSProbeKicksPublisherOnStop(t *testing.T) {
 	var mu sync.Mutex
 	active := true

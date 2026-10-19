@@ -258,6 +258,8 @@ export interface components {
             url: string;
             /** @description Unix epoch milliseconds after which the URL is no longer valid */
             expiresAt: number;
+            /** @description Ordered alternates the player may try when the primary protocol cannot start. The player chooses based on what it can actually play; the server owns the order. */
+            fallbacks: components["schemas"]["PlaybackDescriptor"][];
         };
         BroadcastCreateRequest: {
             source: components["schemas"]["BroadcastSource"];

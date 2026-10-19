@@ -111,10 +111,20 @@ type PlaybackDescriptor = {
   protocol: 'hls' | 'flv' | 'whep';
   url: string;
   expiresAt: number;
+  fallbacks: PlaybackDescriptor[]; // 有序备选，可能为空
 };
 ```
 
-实现隐藏：设备/浏览器能力判断、协议选择与回退、token 签名、SRS URL 构造、过期时间。
+实现隐藏：协议选择与回退、token 签名、SRS URL 构造、过期时间。
+
+T4 的实现把回退表达为描述符里的有序列表：`low` 是 HTTP-FLV 首选 + HLS 备选，`standard` 只给
+HLS。**顺序**由服务端拥有；**最终选择**由播放器拥有，因为只有它能判断当前浏览器能否真正播放
+（Safari 原生 HLS、其他浏览器没有 HLS 解码器）。因此这一版不做 User-Agent 嗅探，也不要求客户端
+上报能力——`ViewerContext` 目前折叠进 Latency Class。等出现按观众区分的策略（签名 token、地理位置、
+ABR 选码率）时，`resolve` 再显式接收 `ViewerContext`。
+
+Viewer count 是 `StreamSession.status` 查询的一部分，由 `IngestProbe` 在 `live` 时按需读取 SRS
+`/api/v1/streams/` 的 `clients` 并减去发布者；不在后台轮询，也不用媒体面调用阻塞 `start`/`stop`。
 
 ### AccessPolicy
 

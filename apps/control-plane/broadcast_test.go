@@ -13,6 +13,7 @@ import (
 const (
 	testRTMPBase = "rtmp://127.0.0.1:1935/live"
 	testFLVBase  = "http://127.0.0.1:8080/live"
+	testHLSBase  = "http://127.0.0.1:8080/hls"
 )
 
 type fakeRunner struct {
@@ -109,8 +110,11 @@ func (p *fakeProcess) signalCount() int {
 type fakeProbe struct {
 	err            error
 	unpublishErr   error
+	viewerErr      error
+	viewers        int
 	calls          []string
 	unpublishCalls []string
+	viewerCalls    []string
 }
 
 func (p *fakeProbe) WaitForPublish(_ context.Context, streamKey string, _ time.Duration) error {
@@ -123,8 +127,17 @@ func (p *fakeProbe) EnsureUnpublished(_ context.Context, streamKey string, _ tim
 	return p.unpublishErr
 }
 
+func (p *fakeProbe) ViewerCount(_ context.Context, streamKey string) (int, error) {
+	p.viewerCalls = append(p.viewerCalls, streamKey)
+	return p.viewers, p.viewerErr
+}
+
+func testConfig() ServiceConfig {
+	return ServiceConfig{RTMPBase: testRTMPBase, FLVBase: testFLVBase, HLSBase: testHLSBase}
+}
+
 func newTestService(runner ProcessRunner) *BroadcastService {
-	return NewBroadcastService(runner, &fakeProbe{}, ServiceConfig{RTMPBase: testRTMPBase, FLVBase: testFLVBase})
+	return NewBroadcastService(runner, &fakeProbe{}, testConfig())
 }
 
 func stringPointer(value string) *string { return &value }
@@ -165,6 +178,39 @@ func TestCreateReturnsPublishAndPlayback(t *testing.T) {
 	if session.Playback.ExpiresAt <= int(time.Now().UnixMilli()) {
 		t.Fatalf("expiresAt = %d, want a future timestamp", session.Playback.ExpiresAt)
 	}
+	if len(session.Playback.Fallbacks) != 1 {
+		t.Fatalf("fallbacks = %+v, want one HLS fallback", session.Playback.Fallbacks)
+	}
+	fallback := session.Playback.Fallbacks[0]
+	if fallback.Protocol != Hls {
+		t.Fatalf("fallback protocol = %q, want hls", fallback.Protocol)
+	}
+	wantHLS := testHLSBase + "/" + session.BroadcastId + ".m3u8"
+	if fallback.Url != wantHLS {
+		t.Fatalf("fallback url = %q, want %q", fallback.Url, wantHLS)
+	}
+}
+
+func TestCreateWithStandardLatencyUsesHLS(t *testing.T) {
+	service := newTestService(&fakeRunner{})
+	spec := fileSpec()
+	spec.LatencyClass = Standard
+
+	session, err := service.Create(spec)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if session.Playback.Protocol != Hls {
+		t.Fatalf("playback protocol = %q, want hls", session.Playback.Protocol)
+	}
+	wantURL := testHLSBase + "/" + session.BroadcastId + ".m3u8"
+	if session.Playback.Url != wantURL {
+		t.Fatalf("playback url = %q, want %q", session.Playback.Url, wantURL)
+	}
+	if len(session.Playback.Fallbacks) != 0 {
+		t.Fatalf("fallbacks = %+v, want none for standard HLS", session.Playback.Fallbacks)
+	}
 }
 
 func TestCreateRejectsInvalidSpecs(t *testing.T) {
@@ -188,14 +234,6 @@ func TestCreateRejectsInvalidSpecs(t *testing.T) {
 				LatencyClass: Low,
 			},
 			want: ErrInvalidBroadcast,
-		},
-		{
-			name: "standard latency has no protocol yet",
-			spec: BroadcastCreateRequest{
-				Source:       BroadcastSource{Type: File, Path: stringPointer("/tmp/a.mp4")},
-				LatencyClass: Standard,
-			},
-			want: ErrUnsupportedLatency,
 		},
 		{
 			name: "ultra-low latency has no protocol yet",
@@ -251,7 +289,7 @@ func TestStartWaitsForIngest(t *testing.T) {
 	service := NewBroadcastService(
 		runner,
 		probe,
-		ServiceConfig{RTMPBase: testRTMPBase, FLVBase: testFLVBase},
+		testConfig(),
 	)
 	session, err := service.Create(fileSpec())
 	if err != nil {
@@ -333,7 +371,7 @@ func TestStopIsIdempotent(t *testing.T) {
 	service := NewBroadcastService(
 		runner,
 		probe,
-		ServiceConfig{RTMPBase: testRTMPBase, FLVBase: testFLVBase},
+		testConfig(),
 	)
 	session, err := service.Create(fileSpec())
 	if err != nil {
@@ -446,6 +484,163 @@ func TestStartAfterStopLaunchesAgain(t *testing.T) {
 	}
 	if runner.callCount() != 2 {
 		t.Fatalf("ffmpeg starts = %d, want 2", runner.callCount())
+	}
+}
+
+func TestStatusReportsViewerCountWhileLive(t *testing.T) {
+	probe := &fakeProbe{viewers: 3}
+	service := NewBroadcastService(&fakeRunner{}, probe, testConfig())
+	session, err := service.Create(fileSpec())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := service.Start(session.BroadcastId); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	current, err := service.Status(session.BroadcastId)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if current.ViewerCount != 3 {
+		t.Fatalf("viewerCount = %d, want 3", current.ViewerCount)
+	}
+	if len(probe.viewerCalls) != 1 || probe.viewerCalls[0] != session.BroadcastId {
+		t.Fatalf("viewer calls = %v, want [%s]", probe.viewerCalls, session.BroadcastId)
+	}
+}
+
+func TestStatusKeepsLastViewerCountWhenProbeFails(t *testing.T) {
+	probe := &fakeProbe{viewers: 4}
+	service := NewBroadcastService(&fakeRunner{}, probe, testConfig())
+	session, err := service.Create(fileSpec())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := service.Start(session.BroadcastId); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := service.Status(session.BroadcastId); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+
+	probe.viewerErr = errors.New("SRS API unavailable")
+	current, err := service.Status(session.BroadcastId)
+	if err != nil {
+		t.Fatalf("Status after probe failure: %v", err)
+	}
+	if current.ViewerCount != 4 {
+		t.Fatalf("viewerCount = %d, want the last known 4", current.ViewerCount)
+	}
+}
+
+func TestStopClearsViewerCount(t *testing.T) {
+	probe := &fakeProbe{viewers: 2}
+	service := NewBroadcastService(&fakeRunner{}, probe, testConfig())
+	session, err := service.Create(fileSpec())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := service.Start(session.BroadcastId); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := service.Status(session.BroadcastId); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+
+	stopped, err := service.Stop(session.BroadcastId)
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if stopped.ViewerCount != 0 {
+		t.Fatalf("viewerCount after stop = %d, want 0", stopped.ViewerCount)
+	}
+}
+
+func TestStatusDoesNotPollViewersWhenNotLive(t *testing.T) {
+	probe := &fakeProbe{viewers: 9}
+	service := NewBroadcastService(&fakeRunner{}, probe, testConfig())
+	session, err := service.Create(fileSpec())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	idle, err := service.Status(session.BroadcastId)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if idle.ViewerCount != 0 {
+		t.Fatalf("viewerCount while idle = %d, want 0", idle.ViewerCount)
+	}
+	if len(probe.viewerCalls) != 0 {
+		t.Fatalf("viewer calls = %v, want none while idle", probe.viewerCalls)
+	}
+}
+
+type blockingProbe struct {
+	started chan struct{}
+	release chan struct{}
+	viewers int
+}
+
+func (p *blockingProbe) WaitForPublish(context.Context, string, time.Duration) error { return nil }
+
+func (p *blockingProbe) EnsureUnpublished(context.Context, string, time.Duration) error { return nil }
+
+func (p *blockingProbe) ViewerCount(context.Context, string) (int, error) {
+	close(p.started)
+	<-p.release
+	return p.viewers, nil
+}
+
+func TestStatusDoesNotApplyViewerCountAfterStop(t *testing.T) {
+	probe := &blockingProbe{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		viewers: 7,
+	}
+	service := NewBroadcastService(&fakeRunner{}, probe, testConfig())
+	session, err := service.Create(fileSpec())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := service.Start(session.BroadcastId); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	type result struct {
+		session BroadcastSession
+		err     error
+	}
+	statuses := make(chan result, 1)
+	go func() {
+		current, err := service.Status(session.BroadcastId)
+		statuses <- result{session: current, err: err}
+	}()
+
+	<-probe.started
+	if _, err := service.Stop(session.BroadcastId); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	close(probe.release)
+
+	first := <-statuses
+	if first.err != nil {
+		t.Fatalf("Status: %v", first.err)
+	}
+	if first.session.Status != BroadcastSessionStatusStopped {
+		t.Fatalf("status = %q, want stopped", first.session.Status)
+	}
+	if first.session.ViewerCount != 0 {
+		t.Fatalf("viewerCount = %d, want 0 after stop", first.session.ViewerCount)
+	}
+
+	current, err := service.Status(session.BroadcastId)
+	if err != nil {
+		t.Fatalf("Status after stop: %v", err)
+	}
+	if current.ViewerCount != 0 {
+		t.Fatalf("viewerCount = %d, want 0", current.ViewerCount)
 	}
 }
 

@@ -13,10 +13,11 @@ import (
 const probeInterval = 200 * time.Millisecond
 
 // IngestProbe owns the media-plane checks the control plane needs:
-// media actually flowing, and resources actually released.
+// media actually flowing, resources actually released, and who is watching.
 type IngestProbe interface {
 	WaitForPublish(ctx context.Context, streamKey string, timeout time.Duration) error
 	EnsureUnpublished(ctx context.Context, streamKey string, timeout time.Duration) error
+	ViewerCount(ctx context.Context, streamKey string) (int, error)
 }
 
 type SRSProbe struct {
@@ -36,11 +37,11 @@ func (probe *SRSProbe) WaitForPublish(ctx context.Context, streamKey string, tim
 	var lastErr error
 
 	for {
-		active, _, err := probe.streamState(ctx, streamKey)
+		state, err := probe.streamState(ctx, streamKey)
 		switch {
 		case err != nil:
 			lastErr = err
-		case active:
+		case state.active:
 			return nil
 		}
 
@@ -64,14 +65,14 @@ func (probe *SRSProbe) EnsureUnpublished(ctx context.Context, streamKey string, 
 	var lastErr error
 
 	for {
-		active, cid, err := probe.streamState(ctx, streamKey)
+		state, err := probe.streamState(ctx, streamKey)
 		switch {
 		case err != nil:
 			lastErr = err
-		case !active:
+		case !state.active:
 			return nil
-		case cid != "":
-			if kickErr := probe.kickClient(ctx, cid); kickErr != nil {
+		case state.cid != "":
+			if kickErr := probe.kickClient(ctx, state.cid); kickErr != nil {
 				lastErr = kickErr
 			}
 		}
@@ -95,6 +96,7 @@ type streamsResponse struct {
 	Code    int `json:"code"`
 	Streams []struct {
 		Name    string `json:"name"`
+		Clients int    `json:"clients"`
 		Publish struct {
 			Active bool   `json:"active"`
 			CID    string `json:"cid"`
@@ -102,36 +104,64 @@ type streamsResponse struct {
 	} `json:"streams"`
 }
 
-func (probe *SRSProbe) streamState(ctx context.Context, streamKey string) (bool, string, error) {
+// streamState is one SRS streams query. SRS reports `clients` as the number of
+// players consuming the stream, which is the Broadcast's viewer count.
+type streamState struct {
+	active  bool
+	cid     string
+	clients int
+}
+
+func (probe *SRSProbe) streamState(ctx context.Context, streamKey string) (streamState, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.BaseURL+"/api/v1/streams/", nil)
 	if err != nil {
-		return false, "", err
+		return streamState{}, err
 	}
 
 	response, err := probe.Client.Do(request)
 	if err != nil {
-		return false, "", err
+		return streamState{}, err
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return false, "", fmt.Errorf("SRS API returned %d", response.StatusCode)
+		return streamState{}, fmt.Errorf("SRS API returned %d", response.StatusCode)
 	}
 
 	var body streamsResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		return false, "", err
+		return streamState{}, err
 	}
 	if body.Code != 0 {
-		return false, "", fmt.Errorf("SRS API returned code %d", body.Code)
+		return streamState{}, fmt.Errorf("SRS API returned code %d", body.Code)
 	}
 
 	for _, stream := range body.Streams {
 		if stream.Name == streamKey && stream.Publish.Active {
-			return true, stream.Publish.CID, nil
+			return streamState{
+				active:  true,
+				cid:     stream.Publish.CID,
+				clients: stream.Clients,
+			}, nil
 		}
 	}
-	return false, "", nil
+	return streamState{}, nil
+}
+
+// ViewerCount returns the number of clients playing the stream. SRS counts the
+// publisher among a stream's clients, so an active stream's publisher is
+// subtracted. A stream that SRS does not know about has no viewers.
+func (probe *SRSProbe) ViewerCount(ctx context.Context, streamKey string) (int, error) {
+	state, err := probe.streamState(ctx, streamKey)
+	if err != nil {
+		return 0, err
+	}
+
+	viewers := state.clients
+	if state.active && viewers > 0 {
+		viewers--
+	}
+	return viewers, nil
 }
 
 func (probe *SRSProbe) kickClient(ctx context.Context, cid string) error {
