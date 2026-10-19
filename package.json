@@ -17,6 +17,11 @@
     "infra:ps": "sh scripts/compose.sh ps",
     "infra:logs": "sh scripts/compose.sh logs -f"
   },
+  "dependencies": {
+    "mpegts.js": "1.8.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@types/node": "^24.19.2",
@@ -24,8 +29,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "nx": "23.3.0",
-    "react": "19.3.1",
-    "react-dom": "19.3.1",
+    "openapi-typescript": "7.13.0",
     "typescript": "5.9.3",
     "vite": "8.3.4",
     "vitest": "5.0.5"

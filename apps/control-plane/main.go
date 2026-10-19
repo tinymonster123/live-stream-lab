@@ -1,39 +1,61 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 )
 
-type healthResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
+type appConfig struct {
+	Addr       string
+	RTMPBase   string
+	FLVBase    string
+	SRSAPIBase string
+	FFmpegBin  string
 }
 
-func newMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealth)
-	return mux
-}
-
-func handleHealth(writer http.ResponseWriter, _ *http.Request) {
-	writer.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(writer).Encode(healthResponse{Status: "ok", Service: "control-plane"}); err != nil {
-		log.Printf("encode health response: %v", err)
+func configFromEnv() appConfig {
+	return appConfig{
+		Addr:       envOrDefault("CONTROL_PLANE_ADDR", ":8081"),
+		RTMPBase:   envOrDefault("SRS_RTMP_BASE", "rtmp://127.0.0.1:1935/live"),
+		FLVBase:    envOrDefault("SRS_FLV_BASE", "http://127.0.0.1:8080/live"),
+		SRSAPIBase: envAllowEmpty("SRS_API_BASE", "http://127.0.0.1:1985"),
+		FFmpegBin:  envOrDefault("FFMPEG_BIN", "ffmpeg"),
 	}
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+// envAllowEmpty lets an explicitly empty value disable an optional feature.
+func envAllowEmpty(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
 }
 
 func main() {
-	address := os.Getenv("CONTROL_PLANE_ADDR")
-	if address == "" {
-		address = ":8081"
+	config := configFromEnv()
+
+	var probe IngestProbe
+	if config.SRSAPIBase != "" {
+		probe = NewSRSProbe(config.SRSAPIBase)
 	}
 
-	server := &http.Server{Addr: address, Handler: newMux()}
+	service := NewBroadcastService(
+		ExecRunner{Bin: config.FFmpegBin},
+		probe,
+		ServiceConfig{RTMPBase: config.RTMPBase, FLVBase: config.FLVBase},
+	)
 
-	log.Printf("control-plane listening on %s", address)
+	server := &http.Server{Addr: config.Addr, Handler: newMux(service)}
+
+	log.Printf("control-plane listening on %s", config.Addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

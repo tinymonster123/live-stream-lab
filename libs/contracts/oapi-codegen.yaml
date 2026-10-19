@@ -1,0 +1,4 @@
+package: main
+output: apps/control-plane/models.gen.go
+generate:
+  models: true

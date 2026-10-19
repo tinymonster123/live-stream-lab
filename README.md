@@ -12,7 +12,7 @@
 
 ## 快速开始
 
-前置：Node >= 22.12、pnpm 11、Go >= 1.24、uv、Docker Desktop（版本见 [`docs/dev.md`](docs/dev.md)）。
+前置：Node >= 22.12、pnpm 11、Go >= 1.24、uv、Docker Desktop、FFmpeg（版本见 [`docs/dev.md`](docs/dev.md)）。
 
 ```bash
 pnpm install
@@ -22,6 +22,18 @@ pnpm infra:up
 `pnpm infra:up` 一条命令启动 SRS、Redis、Caddy，并等待三个容器通过健康检查。`pnpm infra:ps` 查看状态，`pnpm infra:down` 停止。
 
 Go 控制面和 Python AI worker 不在 Compose 里：它们原生运行，AI worker 才能使用 Metal/MLX（ADR-0004）。
+
+## M1 Broadcast
+
+```bash
+pnpm infra:up
+pnpm exec nx run control-plane:dev   # 终端 A
+pnpm exec nx run web:dev             # 终端 B
+```
+
+打开 <http://localhost:5173>，选择文件或摄像头源，创建并启动 Broadcast。控制面拉起 FFmpeg
+推流到 SRS，浏览器通过 HTTP-FLV 播放。curl 流程、fixture 生成和局域网配置见
+[`docs/dev.md`](docs/dev.md#broadcastm1)。
 
 ## 常用命令
 

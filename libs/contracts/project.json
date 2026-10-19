@@ -4,6 +4,16 @@
   "root": "libs/contracts",
   "projectType": "library",
   "targets": {
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "pnpm exec openapi-typescript libs/contracts/openapi.json -o libs/contracts/generated/api.d.ts",
+          "GOPROXY=${GOPROXY:-https://goproxy.cn} go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 -config libs/contracts/oapi-codegen.yaml libs/contracts/openapi.json"
+        ],
+        "parallel": false
+      }
+    },
     "build": {
       "executor": "nx:run-commands",
       "options": {

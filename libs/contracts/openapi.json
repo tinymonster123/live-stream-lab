@@ -405,8 +405,15 @@
         "additionalProperties": false,
         "required": ["type"],
         "properties": {
-          "type": { "type": "string", "enum": ["camera", "screen", "file"] },
-          "path": { "type": "string", "description": "Required when type is file" }
+          "type": { "type": "string", "enum": ["camera", "file"] },
+          "path": {
+            "type": "string",
+            "description": "File path for file sources; avfoundation device for camera sources (default 0:0)"
+          },
+          "loop": {
+            "type": "boolean",
+            "description": "Loop the file source, useful for demos and soak tests"
+          }
         }
       },
       "BroadcastSession": {

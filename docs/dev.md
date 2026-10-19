@@ -11,6 +11,7 @@
 | Python | 3.13 | AI worker（`.python-version`） |
 | Docker Desktop | 29.8.2 | SRS、Redis、Caddy |
 | SRS | `v6.0-r2` 镜像 | 媒体面（ADR-0008） |
+| FFmpeg | Homebrew 版 | 控制面拉起推流进程（ADR-0008） |
 
 ## 首次安装
 
@@ -55,6 +56,64 @@ SRS_CANDIDATE=192.168.1.20 pnpm infra:up
 ```
 
 RTMP 接入和 HTTP-FLV/HLS 不受这个变量影响。
+
+## Broadcast（M1）
+
+控制面拥有 Broadcast 生命周期：它返回 publish/playback 描述，并在 `start` 时拉起 FFmpeg、在
+`stop` 时结束进程。
+
+```bash
+# 生成一个 H.264/AAC fixture
+ffmpeg -f lavfi -i testsrc=size=640x360:rate=30 -f lavfi -i sine=frequency=440 \
+  -t 30 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/fixture.mp4
+
+pnpm exec nx run control-plane:dev
+```
+
+```bash
+curl -s -X POST localhost:8081/api/v1/broadcasts \
+  -H 'content-type: application/json' \
+  -d '{"source":{"type":"file","path":"/tmp/fixture.mp4","loop":true},"latencyClass":"low"}'
+
+curl -s -X POST localhost:8081/api/v1/broadcasts/<broadcastId>/start
+curl -s localhost:8081/api/v1/broadcasts/<broadcastId>
+curl -s -X POST localhost:8081/api/v1/broadcasts/<broadcastId>/stop
+```
+
+控制面返回的 `playback.url` 形如 `http://127.0.0.1:8080/live/<streamKey>.flv`，浏览器用
+`mpegts.js` 播放。也可以把 `publish.rtmpUrl` 和 `publish.streamKey` 交给 OBS 或其他 FFmpeg。
+
+`source.type`：
+
+- `file`：`path` 是控制面所在机器上的路径；`loop` 为 `true` 时循环播放。
+- `camera`：`path` 是 avfoundation 设备（默认 `0:0`），需要给终端授予摄像头/麦克风权限。
+
+`start` 会等待 SRS API 报告该 Stream 处于 publishing 状态后才返回 `live`；等待超时会结束 FFmpeg
+并把状态置为 `failed`。文件源必须是 H.264/AAC（控制面用 `-c copy`）。
+
+T3 只实现 `latencyClass: "low"`（HTTP-FLV）。`ultra-low`（WHEP）在 T6，`standard`（HLS）在 T4。
+
+### 验收脚本
+
+```bash
+DURATION=10 scripts/soak-broadcast.sh /tmp/fixture.mp4   # 快速冒烟
+scripts/soak-broadcast.sh /tmp/fixture.mp4               # 默认 600 秒
+```
+
+脚本会创建并启动 Broadcast，每 5 秒检查状态仍为 `live` 且 `playback.url` 返回 FLV 数据，最后停止。
+
+### 控制面环境变量
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `CONTROL_PLANE_ADDR` | `:8081` | HTTP 监听地址 |
+| `SRS_RTMP_BASE` | `rtmp://127.0.0.1:1935/live` | 推流基地址 |
+| `SRS_FLV_BASE` | `http://127.0.0.1:8080/live` | HTTP-FLV 播放基地址 |
+| `SRS_API_BASE` | `http://127.0.0.1:1985` | 用于确认 Stream 已开始推流的 SRS HTTP API；设为空可跳过确认 |
+| `FFMPEG_BIN` | `ffmpeg` | FFmpeg 可执行文件 |
+
+局域网观看时，把 `SRS_FLV_BASE` 改成 `http://<Mac LAN IP>:8080/live` 并设置
+`SRS_CANDIDATE=<Mac LAN IP>`。
 
 ## 原生应用
 
@@ -108,10 +167,16 @@ libs/contracts/
 ```
 
 ```bash
-pnpm exec nx run contracts:build   # node libs/contracts/validate.mjs
+pnpm exec nx run contracts:build     # node libs/contracts/validate.mjs
+pnpm exec nx run contracts:generate  # 重新生成 Go / TypeScript 绑定
 ```
 
-生成代码（Go `oapi-codegen`、TypeScript `openapi-typescript`、Python Pydantic）在后续切片接入；生成物不要手改（ADR-0006）。
+`contracts:generate` 产出两个已提交的生成文件：
+
+- `apps/control-plane/models.gen.go`（`oapi-codegen`）
+- `libs/contracts/generated/api.d.ts`（`openapi-typescript`）
+
+生成物不要手改（ADR-0006）。Go 生成步骤默认使用 `GOPROXY=https://goproxy.cn`，可用同名环境变量覆盖。
 
 ## 网络限制与镜像
 
@@ -130,4 +195,5 @@ pnpm exec nx run contracts:build   # node libs/contracts/validate.mjs
 - SRS 端口映射到 0.0.0.0，局域网设备需要访问；只应在可信局域网内使用。
 - Redis 和 Caddy admin API 只绑定到 `127.0.0.1`，不对局域网暴露。
 - Caddy 在 T1 只是占位响应；HTTPS、内部 CA 与路由在 M2 接入。
-- 控制面目前只有 `/healthz`，Room 与 Broadcast 接口在后续切片实现。
+- 控制面目前实现 Broadcast 的 create/start/stop/status 与 `/healthz`；Room 接口在后续切片实现。
+- Broadcast 状态保存在内存中，控制面重启会丢失。
