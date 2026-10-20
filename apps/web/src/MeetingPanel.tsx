@@ -11,13 +11,11 @@ import {
 } from "./api";
 import { errorMessage } from "./errors";
 import { applyRoomEvent, parseRoomEvent } from "./room";
+import { type RoomMembership, useRoomMedia } from "./useRoomMedia";
 
 type ConnectionState = "idle" | "connecting" | "open" | "closed";
 
-type Membership = {
-  roomCode: string;
-  participantId: string;
-  joinToken: string;
+type Membership = RoomMembership & {
   role: Role;
 };
 
@@ -30,6 +28,7 @@ export function MeetingPanel() {
   const [connection, setConnection] = useState<ConnectionState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const media = useRoomMedia(membership);
 
   useEffect(() => {
     if (!membership) {
@@ -55,6 +54,7 @@ export function MeetingPanel() {
       const update: WsEvent | null = parseRoomEvent(String(event.data));
       if (update) {
         setRoster((current) => applyRoomEvent(current, update));
+        media.handleEvent(update);
       }
     };
     socket.onclose = () => {
@@ -72,7 +72,7 @@ export function MeetingPanel() {
       cancelled = true;
       socket.close();
     };
-  }, [membership]);
+  }, [membership, media.handleEvent]);
 
   function run(action: () => Promise<void>) {
     setBusy(true);
@@ -94,6 +94,8 @@ export function MeetingPanel() {
       roomCode,
       participantId: grant.participantId,
       joinToken: grant.joinToken,
+      publishUrl: grant.publishUrl,
+      subscriptions: grant.subscriptions,
       role: me?.role ?? "guest",
     });
   }
@@ -177,9 +179,56 @@ export function MeetingPanel() {
             {roster.map((participant) => (
               <li key={participant.participantId}>
                 {participant.displayName} ({participant.role})
+                {participant.tracks.length > 0 && (
+                  <span data-testid="roster-tracks">
+                    {" "}
+                    — {participant.tracks.map((track) => track.kind).join(" + ")}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
+
+          <div>
+            <p>
+              Media: <strong data-testid="publish-state">{media.state}</strong>
+            </p>
+            {media.error && <p role="alert">{media.error}</p>}
+            <video
+              data-testid="local-video"
+              autoPlay
+              muted
+              playsInline
+              ref={(element) => {
+                if (element && element.srcObject !== media.localStream) {
+                  element.srcObject = media.localStream;
+                }
+              }}
+            />
+            <div data-testid="remote-videos">
+              {[...media.remoteStreams].map(([participantId, stream]) => (
+                // biome-ignore lint/a11y/useMediaCaption: live meeting media has no caption track
+                <video
+                  key={participantId}
+                  data-testid={`remote-video-${participantId}`}
+                  autoPlay
+                  playsInline
+                  ref={(element) => {
+                    if (!element) {
+                      return;
+                    }
+                    if (element.srcObject !== stream) {
+                      element.srcObject = stream;
+                    }
+                    // Audio autoplay can be refused; a rejected play() leaves
+                    // the element paused, so retry it as a best-effort.
+                    void element.play().catch(() => {});
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+
           <button type="button" onClick={handleLeave} disabled={busy}>
             Leave
           </button>

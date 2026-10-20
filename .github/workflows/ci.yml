@@ -89,7 +89,10 @@ jobs:
   playwright:
     name: Playwright smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
+    env:
+      # Playwright starts SRS itself; the runner reaches Docker Hub directly.
+      SRS_IMAGE: ossrs/srs:v6.0-r2
     steps:
       - uses: actions/checkout@v4
 
@@ -144,6 +147,9 @@ jobs:
 
       - name: Check Caddy
         run: curl -fsS http://127.0.0.1:8088/
+
+      - name: Check Caddy HTTPS with its internal CA
+        run: curl -fsSk https://127.0.0.1:8443/caddy-healthz
 
       - name: Check Redis
         run: docker compose -f infra/compose.yaml exec -T redis redis-cli ping

@@ -40,14 +40,15 @@ pnpm infra:down   # 停止并移除容器
 
 ```bash
 curl http://localhost:1985/api/v1/versions   # SRS HTTP API
-curl http://localhost:8088/                  # Caddy
+curl http://localhost:8088/                  # Caddy hint page
+curl -k https://localhost:8443/healthz       # Caddy HTTPS → 控制面
 ```
 
 ### Docker CLI 不在 PATH
 
 本机的 Docker Desktop CLI 位于 `/Applications/Docker.app/Contents/Resources/bin`，默认不在 `PATH` 上。`scripts/compose.sh` 会自动定位 `docker`，并把同目录加入 `PATH`，因此凭证助手 `docker-credential-desktop` 也能被找到。直接调用 `docker compose` 时需要自己处理这两点。
 
-### SRS 的 CANDIDATE
+### SRS 的 CANDIDATE 与 WebRTC 传输
 
 `infra/srs/srs.conf` 使用环境变量 `$CANDIDATE`，Compose 默认设为 `127.0.0.1`，只适合本机浏览器。局域网其他设备播放 WebRTC 时，用 Mac 的局域网 IP 启动：
 
@@ -55,7 +56,36 @@ curl http://localhost:8088/                  # Caddy
 SRS_CANDIDATE=192.168.1.20 pnpm infra:up
 ```
 
-RTMP 接入和 HTTP-FLV/HLS 不受这个变量影响。
+`rtc_server` 同时监听 UDP 和 TCP 8000（`protocol all`）。Docker Desktop for macOS 的 UDP 端口转发不承载 WebRTC 的 DTLS-SRTP（SRS 官方 demo 也会卡在 ICE），所以 SDP 里同时给出 `udp` 与 `tcp` candidate，浏览器选择先连通的传输。CI 的 Linux runner 上 UDP 正常，两条路径都可用。
+
+RTMP 接入和 HTTP-FLV/HLS 不受这两个设置影响。
+
+### Caddy HTTPS（局域网设备）
+
+Caddy 在容器内监听 443，Compose 发布为 `8443`。`SITE_ADDRESS` 同时决定证书标识；不设置时是 `localhost`：
+
+```bash
+SITE_ADDRESS=192.168.1.20 SRS_CANDIDATE=192.168.1.20 pnpm infra:up
+```
+
+`SITE_ADDRESS` 只写主机名或 IP，不要带端口（它同时用作 TLS SNI 的默认值和证书标识）。Caddy 只做反代，
+Vite（`pnpm exec nx run web:dev`）和 Go 控制面仍要原生运行。
+
+- `https://192.168.1.20:8443/` → Vite（`host.docker.internal:5173`）
+- `https://192.168.1.20:8443/api/*` 与 `/healthz` → Go 控制面（`host.docker.internal:8081`）
+- `https://192.168.1.20:8443/rtc/*` → SRS HTTP API（`srs:1985`），WHIP/WHEP 因此与页面同源
+- `https://192.168.1.20:8443/caddy-healthz` → Caddy 自己的静态响应，用于验证 HTTPS 监听与证书
+- 媒体走 `SRS_CANDIDATE:8000`，不经过 Caddy
+
+证书由 Caddy 内部 CA 签发。把根证书复制到设备并加入信任列表：
+
+```bash
+sh scripts/compose.sh cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+```
+
+macOS 用「钥匙串访问」导入并设为「始终信任」；iOS/Android 需要安装 profile 后手动启用完全信任。浏览器和 curl 对 IP 地址不发送 SNI，所以 Caddyfile 用 `default_sni` 回落到 `SITE_ADDRESS`。
+
+摄像头/麦克风只在安全上下文可用：`localhost` 或 HTTPS。局域网 IP 必须走 `https://...:8443`，不能用 `http://...:8088`。
 
 ## Broadcast（M1）
 
@@ -134,15 +164,17 @@ scripts/soak-broadcast.sh /tmp/fixture.mp4               # 默认 600 秒
 | `SRS_HLS_BASE` | `http://127.0.0.1:8080/live` | HLS 播放基地址 |
 | `SRS_API_BASE` | `http://127.0.0.1:1985` | SRS HTTP API：确认 Stream 已开始推流、踢掉发布者、查询观众数；设为空可跳过确认 |
 | `FFMPEG_BIN` | `ffmpeg` | FFmpeg 可执行文件 |
-| `SRS_WHIP_BASE` | `http://127.0.0.1:8080/rtc/v1/whip/` | Join 返回的占位 WHIP 地址 |
+| `SRS_WHIP_BASE` | `/rtc/v1/whip/` | Join 返回的 WHIP 地址；相对路径由页面 origin 解析并由 Vite/Caddy 反代 |
+| `SRS_WHEP_BASE` | `/rtc/v1/whep/` | 订阅列表里的 WHEP 地址基址 |
 | `JOIN_TOKEN_SECRET` | 每次启动随机生成 | Join Token 的 HMAC 密钥；设置后 token 可跨重启校验，但 Room 仍会丢失 |
 
-局域网观看时，把 `SRS_FLV_BASE`、`SRS_HLS_BASE` 改成 `http://<Mac LAN IP>:8080/live` 并设置
-`SRS_CANDIDATE=<Mac LAN IP>`。
+局域网观看时，把 `SRS_FLV_BASE`、`SRS_HLS_BASE` 改成 `http://<Mac LAN IP>:8080/live`，并设置
+`SRS_CANDIDATE=<Mac LAN IP>`。Meeting 的 WHIP/WHEP 地址保持相对路径，由 Caddy 同源反代；设备访问
+`https://<Mac LAN IP>:8443`。
 
-## Meeting（M2 / T5）
+## Meeting（M2 / T5 + T6）
 
-T5 实现 Room 的控制面生命周期；媒体仍是占位，WHIP/WHEP 在 T6 接入。
+T5 实现 Room 的控制面生命周期；T6 接入 WHIP 推流、WHEP 订阅、Track 上报和浏览器媒体 UI。
 
 ```bash
 # 创建 Meeting，得到 roomCode 与 host Join Token
@@ -171,6 +203,15 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   -H 'content-type: application/json' \
   -H 'Authorization: Bearer <participantJoinToken>' \
   -d '{"participantId":"<participantId>"}'
+
+# WHIP 成功后上报当前发布的 Track（整体替换）
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT \
+  localhost:8081/api/v1/rooms/<roomCode>/tracks \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer <participantJoinToken>' \
+  -d '{"participantId":"<participantId>","tracks":[
+        {"trackId":"camera","kind":"video"},
+        {"trackId":"microphone","kind":"audio"}]}'
 ```
 
 - Join Token 是 HMAC-SHA256 签名的 `v1.<payload>.<signature>`，claims 包含 room、meeting、
@@ -188,10 +229,33 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   `ws: true`。token 位于查询串，会出现在访问日志中；本地实验台允许任意 Origin，生产路由由 Caddy
   同源接管。
 - 每个 Room 的 actor 与进程同生命周期；过期 Room 暂不做后台回收（T8 处理）。
-- `publishUrl` 和 `subscriptions` 目前是占位：`publishUrl` 使用 SRS WHIP 的 URL 形状，
-  `subscriptions` 是空数组；T6 接入真实媒体。
+
+### 媒体（WHIP / WHEP）
+
+- `publishUrl` 是 `/rtc/v1/whip/?app=live&stream=<participantId>`。它是相对路径，浏览器按页面 origin
+  解析；开发时 Vite 把 `/rtc` 反代到 `127.0.0.1:1985`，局域网时 Caddy 反代到 `srs:1985`，因此不需要
+  CORS，`Location` 响应头也可读。
+- 一个 Participant 推一路 Stream，同一路 Stream 同时带摄像头和麦克风；SRS 的 stream 名就是
+  `participantId`。浏览器在 WHIP 返回 201 **且** `connectionState` 变成 `connected` 后才把
+  `publish-state` 置为 `live`，再调用 `PUT /rooms/{code}/tracks` 上报实际存在的 Track。
+- `subscriptions` 按“其他 Participant 已发布的每个 Track”生成；同一 Participant 的多个 Track 共用一个
+  WHEP URL（`/rtc/v1/whep/?app=live&stream=<participantId>`），客户端按 Participant 去重后只开一个
+  PeerConnection。
+- Track 变化通过 WebSocket 推送 `track.published`（带 `whepUrl`）和 `track.unpublished`；新订阅者连接时，
+  服务端先重放 Roster 的 `participant.joined`，再重放每个已发布 Track 的 `track.published`，补上
+  join 与订阅之间的变化。
+- Participant 重入（相同 `participantId`）视为新的媒体会话：旧 Track 会以 `track.unpublished` 广播，
+  订阅方释放 WHEP，等待重新发布。
+- 浏览器离开或关闭页面时关闭 PeerConnection、停止本地 Track，并对 WHIP/WHEP 的 `Location` 发 DELETE；
+  服务端 Room 状态仍只在 `leave` 时更新。
+- 页面展示：`local-video`（静音自动播放）和每个远端 Participant 一个 `remote-video-<participantId>`；
+  `publish-state` 显示 `idle` / `starting` / `live` / `error`。
 - 浏览器验证：`pnpm exec nx run web:dev`，一个标签页 Create Meeting，另一个标签页填 Room Code +
-  名字 Join Room；两边 Roster 会实时更新。
+  名字 Join Room；两边 Roster 实时更新，并各自看到本地预览和对方的画面。
+- 授权：T6 不要求媒体鉴权。任何知道 Room Code 的人都能加入和推流；SRS callback / `AccessPolicy`
+  尚未接入（T7/T8 再处理）。
+- `ultra-low`（Broadcast 的 WHEP 播放）仍未实现，创建 Broadcast 时返回 400；本切片只把 WHEP 用在
+  Meeting 订阅。
 
 ## 原生应用
 
@@ -238,7 +302,7 @@ pnpm exec nx run contracts:test
 | Job | 内容 |
 |---|---|
 | Build, test, typecheck, lint | `nx affected` 跑受影响项目的 build/test/typecheck；`go test -race ./...`；`biome check .` |
-| Playwright smoke | 安装 Chromium，启动 Vite，检查首屏与 Broadcast 表单 |
+| Playwright smoke | 安装 Chromium，启动 Vite、控制面和 SRS，检查首屏、Broadcast 表单、Roster，以及 WHIP 推流/WHEP 订阅 |
 | Compose smoke | 用官方 Docker Hub 镜像启动 SRS/Redis/Caddy，等待健康检查，验证三个服务后清理 |
 
 `nx affected` 在 PR 上用 base/head SHA，在 push 上用 `before`/`sha`。CI 通过 `SRS_IMAGE`、
@@ -251,9 +315,13 @@ pnpm install --frozen-lockfile
 (cd apps/ai-worker && uv sync --all-groups --frozen)
 pnpm exec nx affected -t build test typecheck
 pnpm exec playwright install chromium
-pnpm exec nx run web:e2e
+pnpm exec nx run web:e2e   # 通过 Compose 启动 SRS，需要 Docker 在运行
 pnpm lint
 ```
+
+`web:e2e` 的 Playwright webServer 会启动 Vite、控制面和 SRS。SRS 使用 `scripts/compose.sh up srs`
+前台运行，Playwright 结束时一并停止容器；本机已在跑 SRS 时直接复用。测试用 Chromium 的假摄像头/
+麦克风（`--use-fake-device-for-media-stream`），断言本地预览和远端视频都解码出非零尺寸。
 
 ## 契约
 
@@ -296,6 +364,9 @@ pnpm exec nx run contracts:generate  # 重新生成 Go / TypeScript 绑定
 
 - SRS 端口映射到 0.0.0.0，局域网设备需要访问；只应在可信局域网内使用。
 - Redis 和 Caddy admin API 只绑定到 `127.0.0.1`，不对局域网暴露。
-- Caddy 在 T1 只是占位响应；HTTPS、内部 CA 与路由在 M2 接入。
-- 控制面目前实现 Broadcast 的 create/start/stop/status 与 `/healthz`；Room 接口在后续切片实现。
-- Broadcast 状态保存在内存中，控制面重启会丢失。
+- Caddy 用内部 CA 提供 HTTPS（`8443`），同时反代 Vite、控制面和 SRS HTTP API。局域网设备必须手动信任
+  根证书；`default_sni` 让不带 SNI 的 IP 访问也能完成 TLS。
+- 控制面实现 Broadcast 的 create/start/stop/status、`/healthz`，以及 Room 的 create/join/leave/status/
+  tracks 与 WebSocket。
+- Broadcast 和 Room 状态都保存在内存中，控制面重启会丢失。
+- 媒体鉴权（SRS callback / `AccessPolicy`）尚未接入；Room Code 是当前唯一的门槛。

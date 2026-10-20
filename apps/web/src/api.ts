@@ -9,6 +9,9 @@ export type PlaybackDescriptor = components["schemas"]["PlaybackDescriptor"];
 export type Role = components["schemas"]["RosterEntry"]["role"];
 export type RoomStatus = components["schemas"]["RoomStatus"];
 export type RosterEntry = components["schemas"]["RosterEntry"];
+export type RoomTrack = components["schemas"]["RoomTrack"];
+export type SubscriptionTarget = components["schemas"]["SubscriptionTarget"];
+export type TrackSummary = components["schemas"]["TrackSummary"];
 export type WsEvent = components["schemas"]["WsEvent"];
 
 export class ApiError extends Error {
@@ -106,6 +109,19 @@ export function leaveRoom(
   return request<void>(`/rooms/${encodeURIComponent(roomCode)}/leave`, {
     method: "POST",
     body: JSON.stringify({ participantId }),
+    headers: { Authorization: `Bearer ${joinToken}` },
+  });
+}
+
+export function updateTracks(
+  roomCode: string,
+  participantId: string,
+  tracks: RoomTrack[],
+  joinToken: string,
+): Promise<void> {
+  return request<void>(`/rooms/${encodeURIComponent(roomCode)}/tracks`, {
+    method: "PUT",
+    body: JSON.stringify({ participantId, tracks }),
     headers: { Authorization: `Bearer ${joinToken}` },
   });
 }

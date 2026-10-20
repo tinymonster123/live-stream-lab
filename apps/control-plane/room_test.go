@@ -12,13 +12,26 @@ const testRoomCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 func newTestRoomSession() *RoomSession {
 	service, err := NewRoomSession(RoomConfig{
 		JoinSecret: []byte("test-secret"),
-		WhipBase:   "http://127.0.0.1:8080/rtc/v1/whip/",
+		WhipBase:   "/rtc/v1/whip/",
+		WhepBase:   "/rtc/v1/whep/",
 		TTL:        time.Hour,
 	})
 	if err != nil {
 		panic(err)
 	}
 	return service
+}
+
+func publishTracks(t *testing.T, service *RoomSession, code, participantID, token string, tracks ...RoomTrack) {
+	t.Helper()
+
+	err := service.UpdateTracks(code, RoomTrackUpdate{
+		ParticipantId: participantID,
+		Tracks:        tracks,
+	}, token)
+	if err != nil {
+		t.Fatalf("UpdateTracks: %v", err)
+	}
 }
 
 func createMeeting(t *testing.T, service *RoomSession, host string) MeetingCreated {
@@ -84,7 +97,7 @@ func TestCreateMeetingRejectsEmptyHostName(t *testing.T) {
 	}
 }
 
-func TestJoinIssuesParticipantTokenAndPlaceholder(t *testing.T) {
+func TestJoinIssuesParticipantTokenAndWhipURL(t *testing.T) {
 	service := newTestRoomSession()
 	now := time.Unix(1_700_000_000, 0)
 	service.now = func() time.Time { return now }
@@ -116,6 +129,162 @@ func TestJoinIssuesParticipantTokenAndPlaceholder(t *testing.T) {
 	}
 	if guestClaims.Role != Guest || guestClaims.ParticipantID != guest.ParticipantId {
 		t.Fatalf("guest claims = %+v", guestClaims)
+	}
+}
+
+func TestJoinReturnsSubscriptionsForPublishedTracks(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+
+	if want := "/rtc/v1/whip/?app=live&stream=" + host.ParticipantId; host.PublishUrl != want {
+		t.Fatalf("publishUrl = %q, want %q", host.PublishUrl, want)
+	}
+	if len(host.Subscriptions) != 0 {
+		t.Fatalf("subscriptions = %+v, want none for the first participant", host.Subscriptions)
+	}
+
+	publishTracks(t, service, meeting.RoomCode, host.ParticipantId, host.JoinToken,
+		RoomTrack{TrackId: "camera", Kind: RoomTrackKindVideo},
+		RoomTrack{TrackId: "microphone", Kind: RoomTrackKindAudio},
+	)
+
+	guest := joinRoom(t, service, meeting.RoomCode, "Bob", "")
+	if len(guest.Subscriptions) != 2 {
+		t.Fatalf("subscriptions = %+v, want one per published Track", guest.Subscriptions)
+	}
+	whep := "/rtc/v1/whep/?app=live&stream=" + host.ParticipantId
+	for index, trackID := range []string{"camera", "microphone"} {
+		target := guest.Subscriptions[index]
+		if target.ParticipantId != host.ParticipantId || target.TrackId != trackID || target.WhepUrl != whep {
+			t.Fatalf("subscriptions[%d] = %+v", index, target)
+		}
+	}
+
+	status, err := service.Status(meeting.RoomCode, guest.JoinToken)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	hostEntry := status.Participants[0]
+	if hostEntry.ParticipantId != host.ParticipantId || len(hostEntry.Tracks) != 2 {
+		t.Fatalf("host roster entry = %+v, want two tracks", hostEntry)
+	}
+	if hostEntry.Tracks[0].TrackId != "camera" || hostEntry.Tracks[0].Kind != TrackSummaryKindVideo {
+		t.Fatalf("track = %+v", hostEntry.Tracks[0])
+	}
+	if hostEntry.Tracks[0].Published == nil || !*hostEntry.Tracks[0].Published {
+		t.Fatalf("track published = %v, want true", hostEntry.Tracks[0].Published)
+	}
+}
+
+func TestUpdateTracksReplacesTheReportedSet(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+
+	publishTracks(t, service, meeting.RoomCode, host.ParticipantId, host.JoinToken,
+		RoomTrack{TrackId: "camera", Kind: RoomTrackKindVideo},
+		RoomTrack{TrackId: "microphone", Kind: RoomTrackKindAudio},
+	)
+	publishTracks(t, service, meeting.RoomCode, host.ParticipantId, host.JoinToken,
+		RoomTrack{TrackId: "camera", Kind: RoomTrackKindVideo},
+	)
+
+	status, err := service.Status(meeting.RoomCode, host.JoinToken)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	tracks := status.Participants[0].Tracks
+	if len(tracks) != 1 || tracks[0].TrackId != "camera" {
+		t.Fatalf("tracks = %+v, want only the camera", tracks)
+	}
+}
+
+func TestUpdateTracksRequiresOwnToken(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, service, meeting.RoomCode, "Bob", "")
+
+	tracks := []RoomTrack{{TrackId: "camera", Kind: RoomTrackKindVideo}}
+	cases := []struct {
+		name  string
+		token string
+	}{
+		{name: "missing", token: ""},
+		{name: "another participant", token: host.JoinToken},
+		{name: "host token", token: meeting.JoinToken},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			err := service.UpdateTracks(meeting.RoomCode, RoomTrackUpdate{
+				ParticipantId: guest.ParticipantId,
+				Tracks:        tracks,
+			}, test.token)
+			if !errors.Is(err, ErrForbidden) && !errors.Is(err, ErrInvalidJoinToken) {
+				t.Fatalf("err = %v, want a forbidden token error", err)
+			}
+		})
+	}
+
+	if err := service.UpdateTracks("ZZZZZZ", RoomTrackUpdate{
+		ParticipantId: guest.ParticipantId,
+		Tracks:        tracks,
+	}, guest.JoinToken); !errors.Is(err, ErrRoomNotFound) {
+		t.Fatalf("unknown room err = %v, want ErrRoomNotFound", err)
+	}
+}
+
+func TestUpdateTracksValidatesInput(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+
+	cases := []struct {
+		name   string
+		tracks []RoomTrack
+	}{
+		{name: "empty track id", tracks: []RoomTrack{{Kind: RoomTrackKindVideo}}},
+		{name: "unknown kind", tracks: []RoomTrack{{TrackId: "camera", Kind: "smell"}}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			err := service.UpdateTracks(meeting.RoomCode, RoomTrackUpdate{
+				ParticipantId: host.ParticipantId,
+				Tracks:        test.tracks,
+			}, host.JoinToken)
+			if !errors.Is(err, ErrInvalidRoomRequest) {
+				t.Fatalf("err = %v, want ErrInvalidRoomRequest", err)
+			}
+		})
+	}
+}
+
+func TestRejoinUnpublishesStaleTracks(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, service, meeting.RoomCode, "Bob", "")
+
+	publishTracks(t, service, meeting.RoomCode, guest.ParticipantId, guest.JoinToken,
+		RoomTrack{TrackId: "camera", Kind: RoomTrackKindVideo},
+	)
+
+	if _, err := service.Join(meeting.RoomCode, RoomJoinRequest{
+		DisplayName:   "Bob",
+		ParticipantId: &guest.ParticipantId,
+	}, guest.JoinToken); err != nil {
+		t.Fatalf("rejoin: %v", err)
+	}
+
+	status, err := service.Status(meeting.RoomCode, host.JoinToken)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	for _, entry := range status.Participants {
+		if entry.ParticipantId == guest.ParticipantId && len(entry.Tracks) != 0 {
+			t.Fatalf("guest tracks after rejoin = %+v, want none", entry.Tracks)
+		}
 	}
 }
 

@@ -12,6 +12,7 @@ type appConfig struct {
 	FLVBase         string
 	HLSBase         string
 	WhipBase        string
+	WhepBase        string
 	SRSAPIBase      string
 	FFmpegBin       string
 	JoinTokenSecret string
@@ -24,6 +25,7 @@ func configFromEnv() appConfig {
 		FLVBase:         envOrDefault("SRS_FLV_BASE", "http://127.0.0.1:8080/live"),
 		HLSBase:         envOrDefault("SRS_HLS_BASE", "http://127.0.0.1:8080/live"),
 		WhipBase:        envOrDefault("SRS_WHIP_BASE", defaultWhipBase),
+		WhepBase:        envOrDefault("SRS_WHEP_BASE", defaultWhepBase),
 		SRSAPIBase:      envAllowEmpty("SRS_API_BASE", "http://127.0.0.1:1985"),
 		FFmpegBin:       envOrDefault("FFMPEG_BIN", "ffmpeg"),
 		JoinTokenSecret: os.Getenv("JOIN_TOKEN_SECRET"),
@@ -66,6 +68,7 @@ func main() {
 	rooms, err := NewRoomSession(RoomConfig{
 		JoinSecret: []byte(config.JoinTokenSecret),
 		WhipBase:   config.WhipBase,
+		WhepBase:   config.WhepBase,
 	})
 	if err != nil {
 		log.Fatal(err)

@@ -58,6 +58,110 @@ func readLeftEvent(t *testing.T, conn *websocket.Conn) ParticipantLeftEvent {
 	return event
 }
 
+func readTrackPublishedEvent(t *testing.T, conn *websocket.Conn) TrackPublishedEvent {
+	t.Helper()
+
+	var event TrackPublishedEvent
+	if err := json.Unmarshal(readRawEvent(t, conn), &event); err != nil {
+		t.Fatalf("decode track.published event: %v", err)
+	}
+	return event
+}
+
+func readTrackUnpublishedEvent(t *testing.T, conn *websocket.Conn) TrackUnpublishedEvent {
+	t.Helper()
+
+	var event TrackUnpublishedEvent
+	if err := json.Unmarshal(readRawEvent(t, conn), &event); err != nil {
+		t.Fatalf("decode track.unpublished event: %v", err)
+	}
+	return event
+}
+
+func TestWebSocketBroadcastsTrackPublishAndUnpublish(t *testing.T) {
+	rooms := newTestRoomSession()
+	server := httptest.NewServer(newMux(newTestService(&fakeRunner{}), rooms))
+	defer server.Close()
+
+	meeting := createMeeting(t, rooms, "Alice")
+	host := joinRoom(t, rooms, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, rooms, meeting.RoomCode, "Bob", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(
+		ctx,
+		roomSocketURL(server.URL, meeting.RoomCode, host.JoinToken),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// The subscriber first receives the current Roster, including the guest.
+	if replay := readJoinedEvent(t, conn); replay.ParticipantId != guest.ParticipantId {
+		t.Fatalf("roster replay = %+v, want the guest", replay)
+	}
+
+	publishTracks(t, rooms, meeting.RoomCode, guest.ParticipantId, guest.JoinToken,
+		RoomTrack{TrackId: "camera", Kind: RoomTrackKindVideo},
+	)
+	published := readTrackPublishedEvent(t, conn)
+	if published.Type != "track.published" {
+		t.Fatalf("type = %v, want track.published", published.Type)
+	}
+	if published.ParticipantId != guest.ParticipantId || published.TrackId != "camera" {
+		t.Fatalf("event = %+v", published)
+	}
+	if published.Kind != TrackPublishedEventKindVideo {
+		t.Fatalf("kind = %q, want video", published.Kind)
+	}
+	if want := "/rtc/v1/whep/?app=live&stream=" + guest.ParticipantId; published.WhepUrl != want {
+		t.Fatalf("whepUrl = %q, want %q", published.WhepUrl, want)
+	}
+
+	publishTracks(t, rooms, meeting.RoomCode, guest.ParticipantId, guest.JoinToken)
+	unpublished := readTrackUnpublishedEvent(t, conn)
+	if unpublished.ParticipantId != guest.ParticipantId || unpublished.TrackId != "camera" {
+		t.Fatalf("event = %+v", unpublished)
+	}
+}
+
+func TestWebSocketReplaysPublishedTracksToNewSubscriber(t *testing.T) {
+	rooms := newTestRoomSession()
+	server := httptest.NewServer(newMux(newTestService(&fakeRunner{}), rooms))
+	defer server.Close()
+
+	meeting := createMeeting(t, rooms, "Alice")
+	host := joinRoom(t, rooms, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, rooms, meeting.RoomCode, "Bob", "")
+	publishTracks(t, rooms, meeting.RoomCode, guest.ParticipantId, guest.JoinToken,
+		RoomTrack{TrackId: "camera", Kind: RoomTrackKindVideo},
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(
+		ctx,
+		roomSocketURL(server.URL, meeting.RoomCode, host.JoinToken),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	joined := readJoinedEvent(t, conn)
+	if joined.ParticipantId != guest.ParticipantId {
+		t.Fatalf("joined replay = %+v, want the guest", joined)
+	}
+	published := readTrackPublishedEvent(t, conn)
+	if published.ParticipantId != guest.ParticipantId || published.TrackId != "camera" {
+		t.Fatalf("track replay = %+v", published)
+	}
+}
+
 func TestWebSocketRejectsUnusableTokens(t *testing.T) {
 	rooms := newTestRoomSession()
 	server := httptest.NewServer(newMux(newTestService(&fakeRunner{}), rooms))

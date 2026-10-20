@@ -22,6 +22,7 @@ func newMux(broadcasts *BroadcastService, rooms *RoomSession) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/rooms/{roomCode}", rooms.handleRoomStatus)
 	mux.HandleFunc("POST /api/v1/rooms/{roomCode}/join", rooms.handleJoinRoom)
 	mux.HandleFunc("POST /api/v1/rooms/{roomCode}/leave", rooms.handleLeaveRoom)
+	mux.HandleFunc("PUT /api/v1/rooms/{roomCode}/tracks", rooms.handleUpdateRoomTracks)
 	mux.HandleFunc("GET /api/v1/rooms/{roomCode}/ws", rooms.handleRoomSocket)
 	return mux
 }

@@ -47,6 +47,48 @@ describe("applyRoomEvent", () => {
     expect(applyRoomEvent([host, guest], event)).toEqual([host]);
   });
 
+  it("adds a published Track to its Participant", () => {
+    const event: WsEvent = {
+      type: "track.published",
+      participantId: guest.participantId,
+      trackId: "camera",
+      kind: "video",
+      whepUrl: "/rtc/v1/whep/?app=live&stream=p-guest",
+    };
+
+    const next = applyRoomEvent([host, guest], event);
+    expect(next[1]?.tracks).toEqual([{ trackId: "camera", kind: "video", published: true }]);
+  });
+
+  it("replaces a Track without duplicating it", () => {
+    const published: WsEvent = {
+      type: "track.published",
+      participantId: guest.participantId,
+      trackId: "camera",
+      kind: "video",
+      whepUrl: "/rtc/v1/whep/?app=live&stream=p-guest",
+    };
+    const once = applyRoomEvent([host, guest], published);
+    const twice = applyRoomEvent(once, published);
+
+    expect(twice[1]?.tracks).toHaveLength(1);
+  });
+
+  it("removes an unpublished Track", () => {
+    const withTrack: RosterEntry = {
+      ...guest,
+      tracks: [{ trackId: "camera", kind: "video", published: true }],
+    };
+
+    const next = applyRoomEvent([host, withTrack], {
+      type: "track.unpublished",
+      participantId: guest.participantId,
+      trackId: "camera",
+    });
+
+    expect(next[1]?.tracks).toEqual([]);
+  });
+
   it("ignores events that do not affect the Roster", () => {
     const event: WsEvent = {
       type: "mute.changed",

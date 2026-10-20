@@ -268,6 +268,24 @@ func (e RoomStatusState) Valid() bool {
 	}
 }
 
+// Defines values for RoomTrackKind.
+const (
+	RoomTrackKindAudio RoomTrackKind = "audio"
+	RoomTrackKindVideo RoomTrackKind = "video"
+)
+
+// Valid indicates whether the value is a known member of the RoomTrackKind enum.
+func (e RoomTrackKind) Valid() bool {
+	switch e {
+	case RoomTrackKindAudio:
+		return true
+	case RoomTrackKindVideo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RosterEntryRole.
 const (
 	Guest RosterEntryRole = "guest"
@@ -410,10 +428,10 @@ type JoinGrant struct {
 	JoinToken     string `json:"joinToken"`
 	ParticipantId string `json:"participantId"`
 
-	// PublishUrl Placeholder WHIP endpoint for this Participant until the media adapter lands in T6
+	// PublishUrl WHIP endpoint for this Participant's Stream, carrying app=live&stream=<participantId>. Relative URLs resolve against the app origin (Vite or Caddy proxy).
 	PublishUrl string `json:"publishUrl"`
 
-	// Subscriptions Placeholder subscription list; empty until the media adapter lands in T6
+	// Subscriptions WHEP targets for Tracks other Participants already publish. One target per published Track; several Tracks may share one Stream and WHEP URL.
 	Subscriptions []SubscriptionTarget `json:"subscriptions"`
 }
 
@@ -551,6 +569,23 @@ type RoomStatus struct {
 // RoomStatusState defines model for RoomStatus.State.
 type RoomStatusState string
 
+// RoomTrack defines model for RoomTrack.
+type RoomTrack struct {
+	Kind    RoomTrackKind `json:"kind"`
+	TrackId string        `json:"trackId"`
+}
+
+// RoomTrackKind defines model for RoomTrack.Kind.
+type RoomTrackKind string
+
+// RoomTrackUpdate defines model for RoomTrackUpdate.
+type RoomTrackUpdate struct {
+	ParticipantId string `json:"participantId"`
+
+	// Tracks The complete set of Tracks this Participant currently publishes. An empty array unpublishes everything.
+	Tracks []RoomTrack `json:"tracks"`
+}
+
 // RosterEntry defines model for RosterEntry.
 type RosterEntry struct {
 	DisplayName   string          `json:"displayName"`
@@ -576,6 +611,9 @@ type TrackPublishedEvent struct {
 	ParticipantId string                  `json:"participantId"`
 	TrackId       string                  `json:"trackId"`
 	Type          interface{}             `json:"type"`
+
+	// WhepUrl WHEP endpoint for the Participant's Stream. Tracks sharing a Stream share this URL.
+	WhepUrl string `json:"whepUrl"`
 }
 
 // TrackPublishedEventKind defines model for TrackPublishedEvent.Kind.
@@ -635,6 +673,9 @@ type JoinRoomJSONRequestBody = RoomJoinRequest
 
 // LeaveRoomJSONRequestBody defines body for LeaveRoom for application/json ContentType.
 type LeaveRoomJSONRequestBody = RoomLeaveRequest
+
+// UpdateRoomTracksJSONRequestBody defines body for UpdateRoomTracks for application/json ContentType.
+type UpdateRoomTracksJSONRequestBody = RoomTrackUpdate
 
 // AsParticipantJoinedEvent returns the union data inside the WsEvent as a ParticipantJoinedEvent
 func (t WsEvent) AsParticipantJoinedEvent() (ParticipantJoinedEvent, error) {
