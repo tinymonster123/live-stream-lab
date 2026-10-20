@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,6 +16,14 @@ type room struct {
 	participants map[string]*participant
 	subscribers  map[string]*roomSubscriber
 	order        []string
+
+	// emptySince is when the Room last had no online Participant; zero while
+	// at least one Participant is online.
+	emptySince time.Time
+	// kicked blocks a participantId from rejoining after the host removed it.
+	kicked map[string]struct{}
+	// closed is read by the session ticker to skip tombstoned Rooms.
+	closed atomic.Bool
 }
 
 type participant struct {
@@ -23,12 +32,17 @@ type participant struct {
 	role        RosterEntryRole
 	muted       bool
 	tracks      []TrackSummary
+	lastSeen    time.Time
+	online      bool
 }
 
 type roomSubscriber struct {
 	participantID string
 	events        chan any
 	done          chan struct{}
+	// closeReason is set when the Room removes the Participant (a kick) so the
+	// socket handler can tell the client why it is being disconnected.
+	closeReason string
 }
 
 type joinCommand struct {
@@ -52,7 +66,13 @@ type leaveCommand struct {
 }
 
 type statusCommand struct {
-	reply chan RoomStatus
+	participantID string
+	reply         chan statusResult
+}
+
+type statusResult struct {
+	status RoomStatus
+	err    error
 }
 
 type subscribeCommand struct {
@@ -76,36 +96,123 @@ type muteCommand struct {
 	reply         chan error
 }
 
+type heartbeatCommand struct {
+	participantID string
+	reply         chan error
+}
+
+type kickCommand struct {
+	hostID        string
+	participantID string
+	reply         chan error
+}
+
+type sweepCommand struct {
+	now   time.Time
+	reply chan struct{}
+}
+
 func (room *room) run(now func() time.Time, newID func() string) {
 	for command := range room.commands {
 		switch command := command.(type) {
 		case joinCommand:
 			command.reply <- room.join(command, now(), newID)
 		case leaveCommand:
-			command.reply <- room.leave(command)
+			command.reply <- room.leave(command, now())
 		case statusCommand:
-			command.reply <- room.status(now())
+			command.reply <- room.status(command, now())
 		case subscribeCommand:
 			command.reply <- room.subscribe(command, now())
 		case unsubscribeCommand:
 			room.unsubscribe(command)
 		case tracksCommand:
-			command.reply <- room.updateTracks(command)
+			command.reply <- room.updateTracks(command, now())
 		case muteCommand:
-			command.reply <- room.updateMute(command)
+			command.reply <- room.updateMute(command, now())
+		case heartbeatCommand:
+			command.reply <- room.heartbeat(command.participantID, now())
+		case kickCommand:
+			command.reply <- room.kick(command, now())
+		case sweepCommand:
+			room.sweep(command.now)
+			close(command.reply)
 		}
 	}
 }
 
-func (room *room) join(command joinCommand, now time.Time, newID func() string) joinResult {
+// inactive reports whether the Room refuses further state changes: it closed
+// through the empty grace period or reached its TTL.
+func (room *room) inactive(now time.Time) bool {
+	return room.closed.Load() || !now.Before(room.expiresAt)
+}
+
+// sweep advances the Room's time-based state: heartbeat timeouts, the empty
+// grace period, and the overall TTL.
+func (room *room) sweep(now time.Time) {
+	if room.closed.Load() {
+		return
+	}
 	if !now.Before(room.expiresAt) {
+		room.close()
+		return
+	}
+
+	for _, id := range room.order {
+		participant, ok := room.participants[id]
+		if !ok || !participant.online || now.Sub(participant.lastSeen) < participantTimeout {
+			continue
+		}
+		participant.online = false
+		room.broadcast(ParticipantOfflineEvent{
+			Type:          "participant.offline",
+			ParticipantId: participant.id,
+		}, "")
+	}
+
+	room.refreshEmpty(now)
+	if !room.emptySince.IsZero() && now.Sub(room.emptySince) >= emptyRoomGrace {
+		room.close()
+	}
+}
+
+// refreshEmpty starts or clears the empty-room timer. The Room is empty while
+// no Participant is online: participants that dropped or locked their phone
+// keep their Roster entry but stop holding the Room open.
+func (room *room) refreshEmpty(now time.Time) {
+	for _, participant := range room.participants {
+		if participant.online {
+			room.emptySince = time.Time{}
+			return
+		}
+	}
+	if room.emptySince.IsZero() {
+		room.emptySince = now
+	}
+}
+
+func (room *room) close() {
+	room.closed.Store(true)
+	for participantID, subscriber := range room.subscribers {
+		close(subscriber.done)
+		delete(room.subscribers, participantID)
+	}
+}
+
+func (room *room) join(command joinCommand, now time.Time, newID func() string) joinResult {
+	if room.inactive(now) {
 		return joinResult{err: ErrRoomClosed}
 	}
 
 	participantID := ""
 	if command.rejoinID != "" {
+		if _, banned := room.kicked[command.rejoinID]; banned {
+			return joinResult{err: ErrForbidden}
+		}
 		if existing, ok := room.participants[command.rejoinID]; ok {
 			existing.displayName = command.displayName
+			existing.lastSeen = now
+			existing.online = true
+			room.refreshEmpty(now)
 			room.broadcast(joinedEvent(existing), "")
 			// A rejoin starts a new media session, so Tracks and mute state from
 			// the dropped session no longer describe anything. Subscribers must
@@ -142,9 +249,12 @@ func (room *room) join(command joinCommand, now time.Time, newID func() string) 
 		id:          participantID,
 		displayName: command.displayName,
 		role:        role,
+		lastSeen:    now,
+		online:      true,
 	}
 	room.participants[participant.id] = participant
 	room.order = append(room.order, participant.id)
+	room.refreshEmpty(now)
 	room.broadcast(joinedEvent(participant), "")
 
 	return joinResult{
@@ -155,29 +265,93 @@ func (room *room) join(command joinCommand, now time.Time, newID func() string) 
 	}
 }
 
-func (room *room) leave(command leaveCommand) error {
-	if _, ok := room.participants[command.participantID]; !ok {
-		return nil
-	}
-
-	delete(room.participants, command.participantID)
-	room.removeFromOrder(command.participantID)
-	room.broadcast(ParticipantLeftEvent{
-		Type:          "participant.left",
-		ParticipantId: command.participantID,
-	}, command.participantID)
-
-	if subscriber, ok := room.subscribers[command.participantID]; ok {
-		close(subscriber.done)
-		delete(room.subscribers, command.participantID)
-	}
+func (room *room) leave(command leaveCommand, now time.Time) error {
+	room.removeParticipant(command.participantID, now, "")
 	return nil
 }
 
-func (room *room) status(now time.Time) RoomStatus {
+func (room *room) kick(command kickCommand, now time.Time) error {
+	if room.inactive(now) {
+		return ErrRoomClosed
+	}
+	host, ok := room.participants[command.hostID]
+	if !ok || host.role != Host {
+		return ErrForbidden
+	}
+	if command.participantID == "" || command.participantID == command.hostID {
+		return ErrInvalidRoomRequest
+	}
+	if _, ok := room.participants[command.participantID]; !ok {
+		// Already gone: a retried kick is a no-op, and an id that never joined
+		// must not grow the deny list.
+		return nil
+	}
+
+	room.kicked[command.participantID] = struct{}{}
+	room.removeParticipant(command.participantID, now, "kicked")
+	return nil
+}
+
+// removeParticipant drops a Participant from the Roster, tells the other
+// Participants, and closes the removed Participant's signaling socket. The
+// closeReason distinguishes a kick from an ordinary leave.
+func (room *room) removeParticipant(participantID string, now time.Time, closeReason string) {
+	if _, ok := room.participants[participantID]; !ok {
+		return
+	}
+
+	delete(room.participants, participantID)
+	room.removeFromOrder(participantID)
+	room.broadcast(ParticipantLeftEvent{
+		Type:          "participant.left",
+		ParticipantId: participantID,
+	}, participantID)
+
+	if subscriber, ok := room.subscribers[participantID]; ok {
+		subscriber.closeReason = closeReason
+		close(subscriber.done)
+		delete(room.subscribers, participantID)
+	}
+
+	room.refreshEmpty(now)
+}
+
+func (room *room) heartbeat(participantID string, now time.Time) error {
+	if room.inactive(now) {
+		return ErrRoomClosed
+	}
+	participant, ok := room.participants[participantID]
+	if !ok {
+		return ErrForbidden
+	}
+
+	participant.lastSeen = now
+	if participant.online {
+		return nil
+	}
+
+	participant.online = true
+	room.refreshEmpty(now)
+	room.broadcast(ParticipantOnlineEvent{
+		Type:          "participant.online",
+		ParticipantId: participant.id,
+	}, "")
+	return nil
+}
+
+func (room *room) status(command statusCommand, now time.Time) statusResult {
+	// Only current Participants may read the Roster; a kicked or departed
+	// Participant's still-valid token gets no access.
+	if _, ok := room.participants[command.participantID]; !ok {
+		return statusResult{err: ErrForbidden}
+	}
+
 	state := Open
-	if !now.Before(room.expiresAt) {
+	switch {
+	case room.inactive(now):
 		state = Closed
+	case !room.emptySince.IsZero():
+		state = Closing
 	}
 
 	participants := make([]RosterEntry, 0, len(room.participants))
@@ -192,20 +366,21 @@ func (room *room) status(now time.Time) RoomStatus {
 			ParticipantId: participant.id,
 			DisplayName:   participant.displayName,
 			Role:          participant.role,
+			Online:        participant.online,
 			Muted:         participant.muted,
 			Tracks:        tracks,
 		})
 	}
 
-	return RoomStatus{
+	return statusResult{status: RoomStatus{
 		RoomCode:     room.code,
 		State:        state,
 		Participants: participants,
-	}
+	}}
 }
 
 func (room *room) subscribe(command subscribeCommand, now time.Time) error {
-	if !now.Before(room.expiresAt) {
+	if room.inactive(now) {
 		return ErrRoomClosed
 	}
 	if _, ok := room.participants[command.subscriber.participantID]; !ok {
@@ -232,6 +407,19 @@ func (room *room) subscribe(command subscribeCommand, now time.Time) error {
 		default:
 			log.Printf("room %s: dropping roster snapshot for %s", room.code, command.subscriber.participantID)
 			continue
+		}
+
+		// joinedEvent implies presence; replay an offline Participant's state so
+		// a late subscriber sees the same Roster as a live one.
+		if !participant.online {
+			select {
+			case command.subscriber.events <- ParticipantOfflineEvent{
+				Type:          "participant.offline",
+				ParticipantId: participant.id,
+			}:
+			default:
+				log.Printf("room %s: dropping presence snapshot for %s", room.code, command.subscriber.participantID)
+			}
 		}
 
 		// Mute state arrived after the Participant joined; replay it before the
@@ -263,7 +451,10 @@ func (room *room) unsubscribe(command unsubscribeCommand) {
 	}
 }
 
-func (room *room) updateTracks(command tracksCommand) error {
+func (room *room) updateTracks(command tracksCommand, now time.Time) error {
+	if room.inactive(now) {
+		return ErrRoomClosed
+	}
 	participant, ok := room.participants[command.participantID]
 	if !ok {
 		return ErrForbidden
@@ -291,7 +482,10 @@ func (room *room) updateTracks(command tracksCommand) error {
 	return nil
 }
 
-func (room *room) updateMute(command muteCommand) error {
+func (room *room) updateMute(command muteCommand, now time.Time) error {
+	if room.inactive(now) {
+		return ErrRoomClosed
+	}
 	participant, ok := room.participants[command.participantID]
 	if !ok {
 		return ErrForbidden

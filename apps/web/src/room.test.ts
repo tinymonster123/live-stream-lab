@@ -6,6 +6,7 @@ const host: RosterEntry = {
   participantId: "p-host",
   displayName: "Alice",
   role: "host",
+  online: true,
   muted: false,
   tracks: [],
 };
@@ -14,6 +15,7 @@ const guest: RosterEntry = {
   participantId: "p-guest",
   displayName: "Bob",
   role: "guest",
+  online: true,
   muted: false,
   tracks: [],
 };
@@ -47,6 +49,34 @@ describe("applyRoomEvent", () => {
     const event: WsEvent = { type: "participant.left", participantId: guest.participantId };
 
     expect(applyRoomEvent([host, guest], event)).toEqual([host]);
+  });
+
+  it("marks a Participant offline and back online", () => {
+    const offline = applyRoomEvent([host, guest], {
+      type: "participant.offline",
+      participantId: guest.participantId,
+    });
+    expect(offline[1]?.online).toBe(false);
+    expect(offline[0]?.online).toBe(true);
+
+    const online = applyRoomEvent(offline, {
+      type: "participant.online",
+      participantId: guest.participantId,
+    });
+    expect(online[1]?.online).toBe(true);
+  });
+
+  it("treats a rejoin as online", () => {
+    const away: RosterEntry = { ...guest, online: false };
+
+    const next = applyRoomEvent([host, away], {
+      type: "participant.joined",
+      participantId: guest.participantId,
+      displayName: "Bob",
+      role: "guest",
+    });
+
+    expect(next[1]?.online).toBe(true);
   });
 
   it("adds a published Track to its Participant", () => {

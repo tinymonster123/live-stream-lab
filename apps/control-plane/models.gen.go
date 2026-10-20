@@ -220,6 +220,21 @@ func (e RecordingStateChangedEventState) Valid() bool {
 	}
 }
 
+// Defines values for RoomCloseReason.
+const (
+	Kicked RoomCloseReason = "kicked"
+)
+
+// Valid indicates whether the value is a known member of the RoomCloseReason enum.
+func (e RoomCloseReason) Valid() bool {
+	switch e {
+	case Kicked:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RoomEventType.
 const (
 	MuteChanged       RoomEventType = "mute.changed"
@@ -474,6 +489,18 @@ type ParticipantLeftEvent struct {
 	Type          interface{} `json:"type"`
 }
 
+// ParticipantOfflineEvent defines model for ParticipantOfflineEvent.
+type ParticipantOfflineEvent struct {
+	ParticipantId string      `json:"participantId"`
+	Type          interface{} `json:"type"`
+}
+
+// ParticipantOnlineEvent defines model for ParticipantOnlineEvent.
+type ParticipantOnlineEvent struct {
+	ParticipantId string      `json:"participantId"`
+	Type          interface{} `json:"type"`
+}
+
 // PlaybackDescriptor defines model for PlaybackDescriptor.
 type PlaybackDescriptor struct {
 	// ExpiresAt Unix epoch milliseconds after which the URL is no longer valid
@@ -535,6 +562,9 @@ type RecordingTrack struct {
 	Path          string `json:"path"`
 }
 
+// RoomCloseReason Reason carried in the WebSocket close frame when the Room disconnects a Participant. The server and the Web client must agree on these values.
+type RoomCloseReason string
+
 // RoomEvent defines model for RoomEvent.
 type RoomEvent struct {
 	At            time.Time     `json:"at"`
@@ -552,6 +582,11 @@ type RoomJoinRequest struct {
 
 	// ParticipantId Reuse an existing participantId to rejoin after a network drop
 	ParticipantId *string `json:"participantId,omitempty"`
+}
+
+// RoomKickRequest defines model for RoomKickRequest.
+type RoomKickRequest struct {
+	ParticipantId string `json:"participantId"`
 }
 
 // RoomLeaveRequest defines model for RoomLeaveRequest.
@@ -597,7 +632,10 @@ type RosterEntry struct {
 	DisplayName string `json:"displayName"`
 
 	// Muted Whether the Participant's microphone is muted. A muted Participant still publishes the microphone Track and sends silence.
-	Muted         bool            `json:"muted"`
+	Muted bool `json:"muted"`
+
+	// Online False after 15 seconds without a heartbeat. The Participant keeps their participantId and may rejoin with the same Join Token.
+	Online        bool            `json:"online"`
 	ParticipantId string          `json:"participantId"`
 	Role          RosterEntryRole `json:"role"`
 	Tracks        []TrackSummary  `json:"tracks"`
@@ -679,6 +717,9 @@ type CreateMeetingJSONRequestBody = MeetingCreateRequest
 // JoinRoomJSONRequestBody defines body for JoinRoom for application/json ContentType.
 type JoinRoomJSONRequestBody = RoomJoinRequest
 
+// KickParticipantJSONRequestBody defines body for KickParticipant for application/json ContentType.
+type KickParticipantJSONRequestBody = RoomKickRequest
+
 // LeaveRoomJSONRequestBody defines body for LeaveRoom for application/json ContentType.
 type LeaveRoomJSONRequestBody = RoomLeaveRequest
 
@@ -730,6 +771,58 @@ func (t *WsEvent) FromParticipantLeftEvent(v ParticipantLeftEvent) error {
 
 // MergeParticipantLeftEvent performs a merge with any union data inside the WsEvent, using the provided ParticipantLeftEvent
 func (t *WsEvent) MergeParticipantLeftEvent(v ParticipantLeftEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsParticipantOfflineEvent returns the union data inside the WsEvent as a ParticipantOfflineEvent
+func (t WsEvent) AsParticipantOfflineEvent() (ParticipantOfflineEvent, error) {
+	var body ParticipantOfflineEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromParticipantOfflineEvent overwrites any union data inside the WsEvent as the provided ParticipantOfflineEvent
+func (t *WsEvent) FromParticipantOfflineEvent(v ParticipantOfflineEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeParticipantOfflineEvent performs a merge with any union data inside the WsEvent, using the provided ParticipantOfflineEvent
+func (t *WsEvent) MergeParticipantOfflineEvent(v ParticipantOfflineEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsParticipantOnlineEvent returns the union data inside the WsEvent as a ParticipantOnlineEvent
+func (t WsEvent) AsParticipantOnlineEvent() (ParticipantOnlineEvent, error) {
+	var body ParticipantOnlineEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromParticipantOnlineEvent overwrites any union data inside the WsEvent as the provided ParticipantOnlineEvent
+func (t *WsEvent) FromParticipantOnlineEvent(v ParticipantOnlineEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeParticipantOnlineEvent performs a merge with any union data inside the WsEvent, using the provided ParticipantOnlineEvent
+func (t *WsEvent) MergeParticipantOnlineEvent(v ParticipantOnlineEvent) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err

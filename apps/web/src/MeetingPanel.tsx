@@ -4,8 +4,10 @@ import {
   getRoom,
   type JoinOptions,
   joinRoom,
+  kickParticipant,
   leaveRoom,
   type Role,
+  type RoomCloseReason,
   type RosterEntry,
   roomSocketUrl,
   type WsEvent,
@@ -15,6 +17,11 @@ import { applyRoomEvent, parseRoomEvent } from "./room";
 import { type RoomMembership, useRoomMedia } from "./useRoomMedia";
 
 type ConnectionState = "idle" | "connecting" | "open" | "closed";
+
+/** The control plane marks a Participant offline after 15 seconds without a heartbeat. */
+const heartbeatIntervalMs = 5000;
+/** Close reason the Room uses when the host removes a Participant. */
+const kickedCloseReason: RoomCloseReason = "kicked";
 
 type Membership = RoomMembership & {
   role: Role;
@@ -45,6 +52,12 @@ export function MeetingPanel() {
     setConnection("connecting");
 
     const socket = new WebSocket(roomSocketUrl(membership.roomCode, membership.joinToken));
+    const sendHeartbeat = () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "heartbeat" }));
+      }
+    };
+
     socket.onopen = () => {
       if (cancelled) {
         return;
@@ -52,6 +65,7 @@ export function MeetingPanel() {
       setConnection("open");
       // The server replays the current Roster to a new subscriber, so events
       // between the join response and this socket are not lost.
+      sendHeartbeat();
     };
     socket.onmessage = (event) => {
       if (cancelled) {
@@ -63,10 +77,20 @@ export function MeetingPanel() {
         media.handleEvent(update);
       }
     };
-    socket.onclose = () => {
-      if (!cancelled) {
-        setConnection("closed");
+    socket.onclose = (event) => {
+      if (cancelled) {
+        return;
       }
+      if (event.reason === kickedCloseReason) {
+        // The host removed this Participant. Return to the join form and do
+        // not offer Rejoin: the Room refuses the kicked participantId.
+        setConnection("idle");
+        setError("You were removed from the Room.");
+        setRoster([]);
+        setMembership(null);
+        return;
+      }
+      setConnection("closed");
     };
     socket.onerror = () => {
       if (!cancelled) {
@@ -74,8 +98,10 @@ export function MeetingPanel() {
       }
     };
 
+    const heartbeat = setInterval(sendHeartbeat, heartbeatIntervalMs);
     return () => {
       cancelled = true;
+      clearInterval(heartbeat);
       socket.close();
     };
   }, [membership, media.handleEvent]);
@@ -231,8 +257,10 @@ export function MeetingPanel() {
                   data-testid="roster-entry"
                   data-participant-id={participant.participantId}
                   data-muted={participantMuted}
+                  data-online={participant.online}
                 >
                   {participant.displayName} ({participant.role})
+                  {!participant.online && <span data-testid="roster-offline"> — offline</span>}
                   {participantMuted && <span data-testid="roster-muted"> — muted</span>}
                   {cameraOff && <span data-testid="roster-camera-off"> — camera off</span>}
                   {participant.tracks.length > 0 && (
@@ -240,6 +268,24 @@ export function MeetingPanel() {
                       {" "}
                       — {participant.tracks.map((track) => track.kind).join(" + ")}
                     </span>
+                  )}
+                  {membership.role === "host" && !isSelf && (
+                    <button
+                      type="button"
+                      data-testid="roster-kick"
+                      onClick={() =>
+                        run(() =>
+                          kickParticipant(
+                            membership.roomCode,
+                            participant.participantId,
+                            membership.joinToken,
+                          ),
+                        )
+                      }
+                      disabled={busy}
+                    >
+                      Kick
+                    </button>
                   )}
                 </li>
               );
