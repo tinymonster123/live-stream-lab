@@ -66,6 +66,25 @@ func (service *RoomSession) handleUpdateRoomTracks(writer http.ResponseWriter, r
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+func (service *RoomSession) handleUpdateRoomMute(writer http.ResponseWriter, request *http.Request) {
+	var body RoomMuteUpdate
+	if err := decodeJSON(request, &body); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	err := service.UpdateMute(
+		request.PathValue("roomCode"),
+		body,
+		bearerToken(request),
+	)
+	if err != nil {
+		writeServiceError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func (service *RoomSession) handleLeaveRoom(writer http.ResponseWriter, request *http.Request) {
 	var body RoomLeaveRequest
 	if err := decodeJSON(request, &body); err != nil {

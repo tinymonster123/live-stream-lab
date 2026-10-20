@@ -8,6 +8,7 @@ export function applyRoomEvent(roster: RosterEntry[], event: WsEvent): RosterEnt
         participantId: event.participantId,
         displayName: event.displayName,
         role: event.role,
+        muted: false,
         tracks: [],
       };
       const index = roster.findIndex((item) => item.participantId === event.participantId);
@@ -20,7 +21,15 @@ export function applyRoomEvent(roster: RosterEntry[], event: WsEvent): RosterEnt
         return [...roster, entry];
       }
       const next = roster.slice();
-      next[index] = { ...current, ...entry, tracks: current.tracks };
+      // A rejoin keeps the identity but starts a new media session: keep the
+      // Track and mute state until the server replays the new session.
+      next[index] = {
+        ...current,
+        displayName: event.displayName,
+        role: event.role,
+        muted: current.muted,
+        tracks: current.tracks,
+      };
       return next;
     }
 
@@ -55,6 +64,11 @@ export function applyRoomEvent(roster: RosterEntry[], event: WsEvent): RosterEnt
               tracks: item.tracks.filter((track) => track.trackId !== event.trackId),
             }
           : item,
+      );
+
+    case "mute.changed":
+      return roster.map((item) =>
+        item.participantId === event.participantId ? { ...item, muted: event.muted } : item,
       );
 
     default:

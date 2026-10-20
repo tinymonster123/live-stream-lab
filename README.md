@@ -38,11 +38,13 @@ pnpm exec nx run web:dev             # 终端 B
 ## M2 Meeting
 
 同样是两个原生进程。打开两个标签页：一个 Create Meeting，另一个填 Room Code 加入。两个标签页各自
-用 WHIP 推摄像头/麦克风，并通过 WHEP 订阅对方，页面上同时显示本地预览和远端画面。
+用 WHIP 推摄像头/麦克风，并通过 WHEP 订阅对方，页面上同时显示本地预览和远端画面；Mute/Camera 按钮
+控制自己的麦克风和摄像头，Leave 之后可以 Rejoin，并复用同一个 participantId。
 
 局域网设备需要 HTTPS：用 `SITE_ADDRESS=<LAN IP> SRS_CANDIDATE=<LAN IP> pnpm infra:up` 启动基础设施，
 访问 `https://<LAN IP>:8443`，并按 [`docs/dev.md`](docs/dev.md#caddy-https局域网设备) 信任 Caddy 的内部 CA。
-完整的 curl 流程、Track 上报和排障见 [`docs/dev.md`](docs/dev.md#meetingm2-t5--t6)。
+完整的 curl 流程、Track/静音上报、1:1 验收和延迟测量见
+[`docs/dev.md`](docs/dev.md#meetingm2-t5t7)。
 
 ## 常用命令
 

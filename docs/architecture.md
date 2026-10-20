@@ -54,6 +54,10 @@ Participant A ──WHIP──► SRS SFU ──WHEP──► Participant B
 - T5 实现 `RoomSession`、Room Actor、Roster、Join Token 和 WebSocket；T6 接入 WHIP/WHEP：
   Participant 用 WHIP 推一路包含摄像头与麦克风的 Stream，控制面按已发布的 Track 生成 WHEP 订阅列表，
   Track 变化通过 `track.published` / `track.unpublished` 广播。
+- T7 在媒体会话之上补交互状态：静音是 Participant 状态（`mute.changed`），摄像头开关复用 Track
+  集合（关闭时不发布 `camera`）；二者都只改发送端的 Track `enabled`，不重新协商 SDP。显式 Leave 后
+  用同一 `participantId` 重入会按 Join Token 重建 Roster 条目；1:1 帧延迟由 Playwright 读取视频帧里
+  的帧序号测量。
 - `RoomSession`：Room 的控制面生命周期；拥有 Participant、Subscription、录制编排。
 - `Room Actor`：每个 Room 一个 goroutine，串行处理 join/leave/tracks/mute/subscribe。
 - `Signaling`：WebSocket 房间事件 + WHIP/WHEP 订阅列表；不自己交换 SDP。客户端报告 WHIP 成功后通过
@@ -68,6 +72,7 @@ interface RoomSession {
   create(spec: RoomSpec): Promise<RoomHandle>;
   join(roomId: string, principal: Principal): Promise<JoinGrant>;
   updateTracks(roomId: string, participantId: string, tracks: RoomTrack[]): Promise<void>;
+  updateMute(roomId: string, participantId: string, muted: boolean): Promise<void>;
   leave(roomId: string, participantId: string): Promise<void>;
   status(roomId: string): RoomStatus;
 }
@@ -80,7 +85,7 @@ type JoinGrant = {
 };
 ```
 
-调用方只表达“创建/加入/上报 Track/离开/查询”，WHIP/WHEP、SRS stream 命名、订阅扇出都藏在实现里。
+调用方只表达“创建/加入/上报 Track/静音/离开/查询”，WHIP/WHEP、SRS stream 命名、订阅扇出都藏在实现里。
 
 ## 深模块
 

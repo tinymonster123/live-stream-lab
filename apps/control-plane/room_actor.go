@@ -21,6 +21,7 @@ type participant struct {
 	id          string
 	displayName string
 	role        RosterEntryRole
+	muted       bool
 	tracks      []TrackSummary
 }
 
@@ -69,6 +70,12 @@ type tracksCommand struct {
 	reply         chan error
 }
 
+type muteCommand struct {
+	participantID string
+	muted         bool
+	reply         chan error
+}
+
 func (room *room) run(now func() time.Time, newID func() string) {
 	for command := range room.commands {
 		switch command := command.(type) {
@@ -84,6 +91,8 @@ func (room *room) run(now func() time.Time, newID func() string) {
 			room.unsubscribe(command)
 		case tracksCommand:
 			command.reply <- room.updateTracks(command)
+		case muteCommand:
+			command.reply <- room.updateMute(command)
 		}
 	}
 }
@@ -93,14 +102,17 @@ func (room *room) join(command joinCommand, now time.Time, newID func() string) 
 		return joinResult{err: ErrRoomClosed}
 	}
 
+	participantID := ""
 	if command.rejoinID != "" {
 		if existing, ok := room.participants[command.rejoinID]; ok {
 			existing.displayName = command.displayName
 			room.broadcast(joinedEvent(existing), "")
-			// A rejoin starts a new media session, so Tracks from the dropped
-			// session no longer describe anything. Subscribers must release
-			// their WHEP connections until the Participant publishes again.
+			// A rejoin starts a new media session, so Tracks and mute state from
+			// the dropped session no longer describe anything. Subscribers must
+			// release their WHEP connections until the Participant publishes
+			// again, and the client captures fresh devices unmuted.
 			room.clearTracks(existing)
+			room.clearMute(existing)
 			return joinResult{
 				participantID: existing.id,
 				displayName:   existing.displayName,
@@ -108,6 +120,11 @@ func (room *room) join(command joinCommand, now time.Time, newID func() string) 
 				subscriptions: room.subscriptionsFor(existing.id),
 			}
 		}
+
+		// The Participant left the Room but still holds a token for this
+		// identity. Recreate the Roster entry with the same id so other
+		// Participants and the client keep the id they already know.
+		participantID = command.rejoinID
 	}
 
 	role := command.role
@@ -118,8 +135,11 @@ func (room *room) join(command joinCommand, now time.Time, newID func() string) 
 		role = Guest
 	}
 
+	if participantID == "" {
+		participantID = newID()
+	}
 	participant := &participant{
-		id:          newID(),
+		id:          participantID,
 		displayName: command.displayName,
 		role:        role,
 	}
@@ -172,6 +192,7 @@ func (room *room) status(now time.Time) RoomStatus {
 			ParticipantId: participant.id,
 			DisplayName:   participant.displayName,
 			Role:          participant.role,
+			Muted:         participant.muted,
 			Tracks:        tracks,
 		})
 	}
@@ -211,6 +232,16 @@ func (room *room) subscribe(command subscribeCommand, now time.Time) error {
 		default:
 			log.Printf("room %s: dropping roster snapshot for %s", room.code, command.subscriber.participantID)
 			continue
+		}
+
+		// Mute state arrived after the Participant joined; replay it before the
+		// Tracks so a late subscriber sees the same state as a live one.
+		if participant.muted {
+			select {
+			case command.subscriber.events <- muteChangedEvent(participant.id, true):
+			default:
+				log.Printf("room %s: dropping mute snapshot for %s", room.code, command.subscriber.participantID)
+			}
 		}
 
 		// Track state arrived after the Participant joined, so replay it next;
@@ -258,6 +289,28 @@ func (room *room) updateTracks(command tracksCommand) error {
 
 	participant.tracks = command.tracks
 	return nil
+}
+
+func (room *room) updateMute(command muteCommand) error {
+	participant, ok := room.participants[command.participantID]
+	if !ok {
+		return ErrForbidden
+	}
+	if participant.muted == command.muted {
+		return nil
+	}
+
+	participant.muted = command.muted
+	room.broadcast(muteChangedEvent(participant.id, command.muted), participant.id)
+	return nil
+}
+
+func (room *room) clearMute(participant *participant) {
+	if !participant.muted {
+		return
+	}
+	participant.muted = false
+	room.broadcast(muteChangedEvent(participant.id, false), participant.id)
 }
 
 func (room *room) clearTracks(participant *participant) {
@@ -351,5 +404,13 @@ func joinedEvent(participant *participant) ParticipantJoinedEvent {
 		ParticipantId: participant.id,
 		DisplayName:   participant.displayName,
 		Role:          participant.role,
+	}
+}
+
+func muteChangedEvent(participantID string, muted bool) MuteChangedEvent {
+	return MuteChangedEvent{
+		Type:          "mute.changed",
+		ParticipantId: participantID,
+		Muted:         muted,
 	}
 }

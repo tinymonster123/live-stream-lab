@@ -228,6 +228,36 @@ func (service *RoomSession) UpdateTracks(
 	return <-reply
 }
 
+// UpdateMute updates the Participant's microphone mute state. Mute is
+// Participant state rather than Track state: a muted Participant keeps
+// publishing the microphone Track and the browser sends silence.
+func (service *RoomSession) UpdateMute(
+	roomCode string,
+	request RoomMuteUpdate,
+	bearer string,
+) error {
+	target, err := service.room(roomCode)
+	if err != nil {
+		return err
+	}
+
+	claims, err := service.verifyParticipantToken(bearer, roomCode)
+	if err != nil {
+		return err
+	}
+	if claims.ParticipantID != request.ParticipantId {
+		return ErrForbidden
+	}
+
+	reply := make(chan error, 1)
+	target.commands <- muteCommand{
+		participantID: request.ParticipantId,
+		muted:         request.Muted,
+		reply:         reply,
+	}
+	return <-reply
+}
+
 // normalizeTracks validates the reported set and converts it to the Roster's
 // summary shape. Every reported Track is published by definition: to stop
 // publishing one, the caller reports the set without it.

@@ -6,6 +6,7 @@ const host: RosterEntry = {
   participantId: "p-host",
   displayName: "Alice",
   role: "host",
+  muted: false,
   tracks: [],
 };
 
@@ -13,6 +14,7 @@ const guest: RosterEntry = {
   participantId: "p-guest",
   displayName: "Bob",
   role: "guest",
+  muted: false,
   tracks: [],
 };
 
@@ -89,11 +91,44 @@ describe("applyRoomEvent", () => {
     expect(next[1]?.tracks).toEqual([]);
   });
 
-  it("ignores events that do not affect the Roster", () => {
+  it("marks a muted Participant", () => {
     const event: WsEvent = {
       type: "mute.changed",
       participantId: guest.participantId,
       muted: true,
+    };
+
+    const next = applyRoomEvent([host, guest], event);
+    expect(next[1]?.muted).toBe(true);
+    expect(next[0]?.muted).toBe(false);
+  });
+
+  it("keeps Track and mute state across a rejoin event", () => {
+    const joined: RosterEntry = {
+      ...guest,
+      muted: true,
+      tracks: [{ trackId: "microphone", kind: "audio", published: true }],
+    };
+
+    const next = applyRoomEvent([host, joined], {
+      type: "participant.joined",
+      participantId: guest.participantId,
+      displayName: "Robert",
+      role: "guest",
+    });
+
+    expect(next[1]).toMatchObject({
+      displayName: "Robert",
+      muted: true,
+      tracks: [{ trackId: "microphone", kind: "audio", published: true }],
+    });
+  });
+
+  it("ignores events that do not affect the Roster", () => {
+    const event: WsEvent = {
+      type: "recording.state_changed",
+      recordingId: "r1",
+      state: "recording",
     };
 
     expect(applyRoomEvent([host, guest], event)).toEqual([host, guest]);

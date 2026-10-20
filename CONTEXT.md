@@ -36,6 +36,10 @@ _Avoid_: Member list, participant list
 One media source published by a Participant, such as a camera or microphone.
 _Avoid_: Stream, feed
 
+**Mute**:
+A Participant's microphone state. A muted Participant still publishes the microphone Track and sends silence.
+_Avoid_: Audio off, mic disabled
+
 **Stream**:
 The transport-level unit SRS forwards for a Track. One Track is published as one Stream.
 _Avoid_: Track (when you mean transport)

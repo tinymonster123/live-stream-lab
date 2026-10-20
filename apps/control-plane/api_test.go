@@ -297,6 +297,54 @@ func TestUpdateRoomTracksEndpoint(t *testing.T) {
 	}
 }
 
+func TestUpdateRoomMuteEndpoint(t *testing.T) {
+	mux := newTestMux()
+	meeting := decodeJSONBody[MeetingCreated](t, performRequest(
+		t, mux, http.MethodPost, "/api/v1/meetings", `{"hostDisplayName":"Alice"}`,
+	))
+	path := "/api/v1/rooms/" + meeting.RoomCode
+	host := decodeJSONBody[JoinGrant](t, performAuthorizedRequest(
+		t, mux, http.MethodPost, path+"/join", `{"displayName":"Alice"}`, meeting.JoinToken,
+	))
+	guest := decodeJSONBody[JoinGrant](t, performRequest(
+		t, mux, http.MethodPost, path+"/join", `{"displayName":"Bob"}`,
+	))
+
+	body := `{"participantId":"` + guest.ParticipantId + `","muted":true}`
+	updated := performAuthorizedRequest(t, mux, http.MethodPut, path+"/mute", body, guest.JoinToken)
+	if updated.Code != http.StatusNoContent {
+		t.Fatalf("mute status = %d, want 204 (body %s)", updated.Code, updated.Body.String())
+	}
+
+	status := decodeJSONBody[RoomStatus](t, performAuthorizedRequest(
+		t, mux, http.MethodGet, path, "", host.JoinToken,
+	))
+	found := false
+	for _, entry := range status.Participants {
+		if entry.ParticipantId == guest.ParticipantId {
+			found = true
+			if !entry.Muted {
+				t.Fatalf("entry = %+v, want muted", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("participants = %+v, want the guest", status.Participants)
+	}
+
+	forbidden := performAuthorizedRequest(t, mux, http.MethodPut, path+"/mute", body, host.JoinToken)
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("mute another participant = %d, want 403", forbidden.Code)
+	}
+
+	unknown := performAuthorizedRequest(
+		t, mux, http.MethodPut, "/api/v1/rooms/ZZZZZZ/mute", body, guest.JoinToken,
+	)
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown room = %d, want 404", unknown.Code)
+	}
+}
+
 func TestRoomEndpointsRequireAValidJoinToken(t *testing.T) {
 	mux := newTestMux()
 	meeting := decodeJSONBody[MeetingCreated](t, performRequest(

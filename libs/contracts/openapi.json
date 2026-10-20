@@ -225,7 +225,7 @@
         "tags": ["meetings"],
         "operationId": "updateRoomTracks",
         "summary": "Replace the Tracks a Participant is publishing",
-        "description": "The Participant reports the Tracks it currently publishes after WHIP succeeds. The Room updates the Roster and broadcasts track.published / track.unpublished to other Participants.",
+        "description": "The Participant reports the Tracks it currently publishes after WHIP succeeds. The Room updates the Roster and broadcasts track.published / track.unpublished to other Participants. Camera off is reported by leaving the video Track out; the Stream itself stays connected.",
         "security": [{ "joinToken": [] }],
         "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
         "requestBody": {
@@ -239,6 +239,29 @@
         "responses": {
           "204": { "description": "Tracks updated" },
           "400": { "$ref": "#/components/responses/BadRequest" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/rooms/{roomCode}/mute": {
+      "put": {
+        "tags": ["meetings"],
+        "operationId": "updateRoomMute",
+        "summary": "Mute or unmute a Participant's microphone",
+        "description": "Mute is Participant state, not Track state: a muted Participant keeps publishing the microphone Track, but the sender sends silence. The Room updates the Roster and broadcasts mute.changed to other Participants.",
+        "security": [{ "joinToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RoomMuteUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Mute state updated" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
@@ -561,6 +584,15 @@
           }
         }
       },
+      "RoomMuteUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId", "muted"],
+        "properties": {
+          "participantId": { "type": "string" },
+          "muted": { "type": "boolean" }
+        }
+      },
       "RoomTrack": {
         "type": "object",
         "additionalProperties": false,
@@ -590,12 +622,15 @@
       "RosterEntry": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["participantId", "displayName", "role", "tracks"],
+        "required": ["participantId", "displayName", "role", "muted", "tracks"],
         "properties": {
           "participantId": { "type": "string" },
           "displayName": { "type": "string" },
           "role": { "$ref": "#/components/schemas/RosterEntryRole" },
-          "muted": { "type": "boolean" },
+          "muted": {
+            "type": "boolean",
+            "description": "Whether the Participant's microphone is muted. A muted Participant still publishes the microphone Track and sends silence."
+          },
           "tracks": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/TrackSummary" }

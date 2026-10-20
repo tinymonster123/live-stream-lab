@@ -559,6 +559,12 @@ type RoomLeaveRequest struct {
 	ParticipantId string `json:"participantId"`
 }
 
+// RoomMuteUpdate defines model for RoomMuteUpdate.
+type RoomMuteUpdate struct {
+	Muted         bool   `json:"muted"`
+	ParticipantId string `json:"participantId"`
+}
+
 // RoomStatus defines model for RoomStatus.
 type RoomStatus struct {
 	Participants []RosterEntry   `json:"participants"`
@@ -588,8 +594,10 @@ type RoomTrackUpdate struct {
 
 // RosterEntry defines model for RosterEntry.
 type RosterEntry struct {
-	DisplayName   string          `json:"displayName"`
-	Muted         *bool           `json:"muted,omitempty"`
+	DisplayName string `json:"displayName"`
+
+	// Muted Whether the Participant's microphone is muted. A muted Participant still publishes the microphone Track and sends silence.
+	Muted         bool            `json:"muted"`
 	ParticipantId string          `json:"participantId"`
 	Role          RosterEntryRole `json:"role"`
 	Tracks        []TrackSummary  `json:"tracks"`
@@ -673,6 +681,9 @@ type JoinRoomJSONRequestBody = RoomJoinRequest
 
 // LeaveRoomJSONRequestBody defines body for LeaveRoom for application/json ContentType.
 type LeaveRoomJSONRequestBody = RoomLeaveRequest
+
+// UpdateRoomMuteJSONRequestBody defines body for UpdateRoomMute for application/json ContentType.
+type UpdateRoomMuteJSONRequestBody = RoomMuteUpdate
 
 // UpdateRoomTracksJSONRequestBody defines body for UpdateRoomTracks for application/json ContentType.
 type UpdateRoomTracksJSONRequestBody = RoomTrackUpdate

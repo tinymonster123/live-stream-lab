@@ -170,9 +170,29 @@ export interface paths {
         get?: never;
         /**
          * Replace the Tracks a Participant is publishing
-         * @description The Participant reports the Tracks it currently publishes after WHIP succeeds. The Room updates the Roster and broadcasts track.published / track.unpublished to other Participants.
+         * @description The Participant reports the Tracks it currently publishes after WHIP succeeds. The Room updates the Roster and broadcasts track.published / track.unpublished to other Participants. Camera off is reported by leaving the video Track out; the Stream itself stays connected.
          */
         put: operations["updateRoomTracks"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rooms/{roomCode}/mute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Mute or unmute a Participant's microphone
+         * @description Mute is Participant state, not Track state: a muted Participant keeps publishing the microphone Track, but the sender sends silence. The Room updates the Roster and broadcasts mute.changed to other Participants.
+         */
+        put: operations["updateRoomMute"];
         post?: never;
         delete?: never;
         options?: never;
@@ -347,6 +367,10 @@ export interface components {
             /** @description The complete set of Tracks this Participant currently publishes. An empty array unpublishes everything. */
             tracks: components["schemas"]["RoomTrack"][];
         };
+        RoomMuteUpdate: {
+            participantId: string;
+            muted: boolean;
+        };
         RoomTrack: {
             trackId: string;
             /** @enum {string} */
@@ -364,7 +388,8 @@ export interface components {
             participantId: string;
             displayName: string;
             role: components["schemas"]["RosterEntryRole"];
-            muted?: boolean;
+            /** @description Whether the Participant's microphone is muted. A muted Participant still publishes the microphone Track and sends silence. */
+            muted: boolean;
             tracks: components["schemas"]["TrackSummary"][];
         };
         TrackSummary: {
@@ -754,6 +779,32 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateRoomMute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                roomCode: components["parameters"]["RoomCode"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomMuteUpdate"];
+            };
+        };
+        responses: {
+            /** @description Mute state updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

@@ -288,6 +288,127 @@ func TestRejoinUnpublishesStaleTracks(t *testing.T) {
 	}
 }
 
+func TestRejoinAfterLeaveKeepsParticipantID(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, service, meeting.RoomCode, "Bob", "")
+
+	if err := service.Leave(meeting.RoomCode, guest.ParticipantId, guest.JoinToken); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+
+	rejoined, err := service.Join(meeting.RoomCode, RoomJoinRequest{
+		DisplayName:   "Bob",
+		ParticipantId: &guest.ParticipantId,
+	}, guest.JoinToken)
+	if err != nil {
+		t.Fatalf("rejoin: %v", err)
+	}
+	if rejoined.ParticipantId != guest.ParticipantId {
+		t.Fatalf("participantId = %q, want the original %q", rejoined.ParticipantId, guest.ParticipantId)
+	}
+
+	status, err := service.Status(meeting.RoomCode, host.JoinToken)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(status.Participants) != 2 {
+		t.Fatalf("participants = %+v, want Alice and the rejoined Bob", status.Participants)
+	}
+	var bob *RosterEntry
+	for index := range status.Participants {
+		if status.Participants[index].ParticipantId == guest.ParticipantId {
+			bob = &status.Participants[index]
+		}
+	}
+	if bob == nil {
+		t.Fatal("rejoined participant is missing from the Roster")
+	}
+	if bob.DisplayName != "Bob" || len(bob.Tracks) != 0 {
+		t.Fatalf("rejoined entry = %+v, want Bob with no Tracks", bob)
+	}
+}
+
+func TestMuteUpdatesTheRoster(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, service, meeting.RoomCode, "Bob", "")
+
+	mute := func(muted bool, token string) error {
+		return service.UpdateMute(meeting.RoomCode, RoomMuteUpdate{
+			ParticipantId: guest.ParticipantId,
+			Muted:         muted,
+		}, token)
+	}
+	mutedState := func() bool {
+		t.Helper()
+		status, err := service.Status(meeting.RoomCode, host.JoinToken)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		for _, entry := range status.Participants {
+			if entry.ParticipantId == guest.ParticipantId {
+				return entry.Muted
+			}
+		}
+		t.Fatal("guest is missing from the Roster")
+		return false
+	}
+
+	if err := mute(true, guest.JoinToken); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+	if !mutedState() {
+		t.Fatal("guest is not muted after UpdateMute")
+	}
+	if err := mute(false, guest.JoinToken); err != nil {
+		t.Fatalf("unmute: %v", err)
+	}
+	if mutedState() {
+		t.Fatal("guest is still muted after unmuting")
+	}
+
+	if err := mute(true, host.JoinToken); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("muting another participant: err = %v, want ErrForbidden", err)
+	}
+	if err := service.UpdateMute("ZZZZZZ", RoomMuteUpdate{ParticipantId: guest.ParticipantId}, guest.JoinToken); !errors.Is(err, ErrRoomNotFound) {
+		t.Fatalf("unknown room: err = %v, want ErrRoomNotFound", err)
+	}
+}
+
+func TestRejoinResetsMute(t *testing.T) {
+	service := newTestRoomSession()
+	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, service, meeting.RoomCode, "Bob", "")
+
+	if err := service.UpdateMute(meeting.RoomCode, RoomMuteUpdate{
+		ParticipantId: guest.ParticipantId,
+		Muted:         true,
+	}, guest.JoinToken); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+
+	if _, err := service.Join(meeting.RoomCode, RoomJoinRequest{
+		DisplayName:   "Bob",
+		ParticipantId: &guest.ParticipantId,
+	}, guest.JoinToken); err != nil {
+		t.Fatalf("rejoin: %v", err)
+	}
+
+	status, err := service.Status(meeting.RoomCode, host.JoinToken)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	for _, entry := range status.Participants {
+		if entry.ParticipantId == guest.ParticipantId && entry.Muted {
+			t.Fatalf("rejoined entry is still muted: %+v", entry)
+		}
+	}
+}
+
 func TestJoinRejectsExpiredHostToken(t *testing.T) {
 	service := newTestRoomSession()
 	now := time.Unix(1_700_000_000, 0)
