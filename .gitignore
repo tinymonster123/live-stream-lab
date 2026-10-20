@@ -19,3 +19,6 @@ apps/control-plane/control-plane
 test-results/
 playwright-report/
 blob-report/
+
+# Firecrawl research cache
+.firecrawl/

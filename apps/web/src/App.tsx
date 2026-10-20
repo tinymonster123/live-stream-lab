@@ -1,5 +1,5 @@
-import { BroadcastPanel } from "./BroadcastPanel";
-import { MeetingPanel } from "./MeetingPanel";
+import { BroadcastPanel } from "./components/BroadcastPanel";
+import { MeetingPanel } from "./components/MeetingPanel";
 
 export function App() {
   return (

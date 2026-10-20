@@ -47,7 +47,7 @@ export default defineConfig({
       // Playwright owns the server process itself; `go run` leaves a child
       // behind after Playwright stops the wrapper.
       command:
-        "cd ../../apps/control-plane && go build -o /tmp/livelab-e2e-control-plane . && exec /tmp/livelab-e2e-control-plane",
+        "cd ../../apps/control-plane && go build -o /tmp/livelab-e2e-control-plane ./cmd/control-plane && exec /tmp/livelab-e2e-control-plane",
       url: "http://127.0.0.1:8081/healthz",
       reuseExistingServer: false,
       timeout: 120_000,
