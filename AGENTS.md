@@ -30,14 +30,15 @@ Single-context：根 `CONTEXT.md` + `docs/adr/`。见 `docs/agents/domain.md`。
 
 M1 已完成：文件/摄像头 → FFmpeg `-c copy` → RTMP → SRS → HTTP-FLV/HLS → 浏览器播放器，含观众数与 CI。
 M2 进行中：T5 实现 Room 控制面（Room Code、Join Token、Roster、WebSocket join/leave）；T6 接入
-WHIP 推流、WHEP 订阅、Track 上报、Caddy HTTPS 与浏览器本地/远端画面。下一步 T7（双向 1:1 Meeting）。
+WHIP 推流、WHEP 订阅、Track 上报、Caddy HTTPS 与浏览器本地/远端画面；T7 完成双向 1:1（静音、
+摄像头开关、离开/重入、帧延迟测量）。下一步 T8（Room 生命周期加固）。
 
 Spec: [issue #1](https://github.com/tinymonster123/live-stream-lab/issues/1)。
 
 ## 不变量
 
 - `StreamSession` 拥有 Broadcast 开播生命周期，调用方只用 `start/stop/status`；`RoomSession` 拥有
-  Meeting 生命周期，调用方只用 `create/join/updateTracks/leave/status`。
+  Meeting 生命周期，调用方只用 `create/join/updateTracks/updateMute/leave/status`。
 - `Playback.resolve` 拥有协议选择；调用方只拿 `PlaybackDescriptor`。
 - `AccessPolicy` 拥有 allow/deny；SRS callback 只做翻译。
 - SRS 是 SFU；Go 控制面拥有 Roster、Subscription 和 Join Token。

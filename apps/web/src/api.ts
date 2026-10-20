@@ -9,6 +9,8 @@ export type PlaybackDescriptor = components["schemas"]["PlaybackDescriptor"];
 export type Role = components["schemas"]["RosterEntry"]["role"];
 export type RoomStatus = components["schemas"]["RoomStatus"];
 export type RosterEntry = components["schemas"]["RosterEntry"];
+export type RoomJoinRequest = components["schemas"]["RoomJoinRequest"];
+export type RoomMuteUpdate = components["schemas"]["RoomMuteUpdate"];
 export type RoomTrack = components["schemas"]["RoomTrack"];
 export type SubscriptionTarget = components["schemas"]["SubscriptionTarget"];
 export type TrackSummary = components["schemas"]["TrackSummary"];
@@ -83,15 +85,26 @@ export function createMeeting(hostDisplayName: string): Promise<MeetingCreated> 
   });
 }
 
+export type JoinOptions = {
+  /** The Meeting host token, or the Participant token when rejoining. */
+  bearer?: string;
+  /** Reuse an existing identity after leaving or a network drop. */
+  participantId?: string;
+};
+
 export function joinRoom(
   roomCode: string,
   displayName: string,
-  hostToken?: string,
+  options: JoinOptions = {},
 ): Promise<JoinGrant> {
+  const body: RoomJoinRequest = { displayName };
+  if (options.participantId) {
+    body.participantId = options.participantId;
+  }
   return request<JoinGrant>(`/rooms/${encodeURIComponent(roomCode)}/join`, {
     method: "POST",
-    body: JSON.stringify({ displayName }),
-    headers: hostToken ? { Authorization: `Bearer ${hostToken}` } : undefined,
+    body: JSON.stringify(body),
+    headers: options.bearer ? { Authorization: `Bearer ${options.bearer}` } : undefined,
   });
 }
 
@@ -122,6 +135,20 @@ export function updateTracks(
   return request<void>(`/rooms/${encodeURIComponent(roomCode)}/tracks`, {
     method: "PUT",
     body: JSON.stringify({ participantId, tracks }),
+    headers: { Authorization: `Bearer ${joinToken}` },
+  });
+}
+
+export function setMuted(
+  roomCode: string,
+  participantId: string,
+  muted: boolean,
+  joinToken: string,
+): Promise<void> {
+  const body: RoomMuteUpdate = { participantId, muted };
+  return request<void>(`/rooms/${encodeURIComponent(roomCode)}/mute`, {
+    method: "PUT",
+    body: JSON.stringify(body),
     headers: { Authorization: `Bearer ${joinToken}` },
   });
 }

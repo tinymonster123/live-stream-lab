@@ -11,6 +11,7 @@ import {
   leaveRoom,
   type MeetingCreated,
   type RoomStatus,
+  setMuted,
   startBroadcast,
   stopBroadcast,
 } from "./api";
@@ -68,6 +69,7 @@ const room: RoomStatus = {
       participantId: "p1",
       displayName: "Alice",
       role: "host",
+      muted: false,
       tracks: [],
     },
   ],
@@ -91,7 +93,7 @@ describe("meeting api", () => {
   it("joins with the host token when one is provided", async () => {
     const fetchMock = mockFetch(grant);
 
-    await joinRoom("ABC234", "Alice", "host-token");
+    await joinRoom("ABC234", "Alice", { bearer: "host-token" });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/rooms/ABC234/join",
@@ -125,6 +127,36 @@ describe("meeting api", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/rooms/ABC234",
       expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer participant-token" }),
+      }),
+    );
+  });
+
+  it("rejoins with the existing participantId and token", async () => {
+    const fetchMock = mockFetch(grant);
+
+    await joinRoom("ABC234", "Bob", { bearer: "participant-token", participantId: "p1" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/rooms/ABC234/join",
+      expect.objectContaining({
+        body: JSON.stringify({ displayName: "Bob", participantId: "p1" }),
+        headers: expect.objectContaining({ Authorization: "Bearer participant-token" }),
+      }),
+    );
+  });
+
+  it("updates mute state with the participant token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(setMuted("ABC234", "p1", true, "participant-token")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/rooms/ABC234/mute",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ participantId: "p1", muted: true }),
         headers: expect.objectContaining({ Authorization: "Bearer participant-token" }),
       }),
     );

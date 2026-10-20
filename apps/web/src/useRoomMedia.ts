@@ -3,6 +3,7 @@ import {
   type JoinGrant,
   type RoomTrack,
   type SubscriptionTarget,
+  setMuted as updateMute,
   updateTracks,
   type WsEvent,
 } from "./api";
@@ -36,10 +37,15 @@ function delay(milliseconds: number): Promise<void> {
   });
 }
 
-/** Report only the Tracks the captured Stream actually carries. */
-function reportedTracks(stream: MediaStream): RoomTrack[] {
+/**
+ * Report only the Tracks the captured Stream actually carries. Camera off
+ * leaves the video Track out while the WHIP Stream stays connected; the
+ * senders keep sending black frames and silence, so no renegotiation is
+ * needed to turn either back on.
+ */
+function reportedTracks(stream: MediaStream, cameraOn: boolean): RoomTrack[] {
   const tracks: RoomTrack[] = [];
-  if (stream.getVideoTracks().length > 0) {
+  if (cameraOn && stream.getVideoTracks().length > 0) {
     tracks.push({ trackId: "camera", kind: "video" });
   }
   if (stream.getAudioTracks().length > 0) {
@@ -54,6 +60,14 @@ function stopTracks(stream: MediaStream | null) {
   });
 }
 
+/** Disabled Tracks keep their senders and send black frames or silence. */
+function setTrackEnabled(stream: MediaStream, kind: "audio" | "video", enabled: boolean) {
+  const tracks = kind === "video" ? stream.getVideoTracks() : stream.getAudioTracks();
+  for (const track of tracks) {
+    track.enabled = enabled;
+  }
+}
+
 /**
  * Owns the local camera/microphone, the WHIP publisher, and one WHEP
  * subscription per other Participant. The control plane decides who to
@@ -65,9 +79,14 @@ export function useRoomMedia(membership: RoomMembership | null) {
     () => new Map(),
   );
   const [state, setState] = useState<PublishState>("idle");
+  const [muted, setMutedState] = useState(false);
+  const [cameraOn, setCameraOnState] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const publisherRef = useRef<WhipPublisher | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const mutedRef = useRef(false);
+  const cameraOnRef = useRef(true);
   const subscriptionsRef = useRef(new Map<string, ActiveSubscription>());
   // Track IDs still published by each remote Participant. One WHEP session
   // serves all of them, so it closes only when the last Track goes away.
@@ -195,6 +214,68 @@ export function useRoomMedia(membership: RoomMembership | null) {
     [dropSubscription, subscribeTo],
   );
 
+  const reportTracks = useCallback(async (includeCamera: boolean) => {
+    const self = membershipRef.current;
+    const stream = localStreamRef.current;
+    if (!self || !stream) {
+      return;
+    }
+    await updateTracks(
+      self.roomCode,
+      self.participantId,
+      reportedTracks(stream, includeCamera),
+      self.joinToken,
+    );
+  }, []);
+
+  const toggleMute = useCallback(async () => {
+    const self = membershipRef.current;
+    const stream = localStreamRef.current;
+    if (!self || !stream) {
+      return;
+    }
+
+    const previous = mutedRef.current;
+    const apply = (muted: boolean) => {
+      mutedRef.current = muted;
+      setMutedState(muted);
+      setTrackEnabled(stream, "audio", !muted);
+    };
+
+    apply(!previous);
+    try {
+      await updateMute(self.roomCode, self.participantId, !previous, self.joinToken);
+    } catch (caught) {
+      apply(previous);
+      setError(errorMessage(caught));
+    }
+  }, []);
+
+  const toggleCamera = useCallback(async () => {
+    const self = membershipRef.current;
+    const stream = localStreamRef.current;
+    if (!self || !stream) {
+      return;
+    }
+
+    const previous = cameraOnRef.current;
+    const apply = (cameraOn: boolean) => {
+      cameraOnRef.current = cameraOn;
+      setCameraOnState(cameraOn);
+      setTrackEnabled(stream, "video", cameraOn);
+    };
+
+    apply(!previous);
+    try {
+      await reportTracks(!previous);
+    } catch (caught) {
+      // Keep the Roster and the local media in agreement: a failed report
+      // would otherwise leave the camera on while others believe it is off.
+      apply(previous);
+      setError(errorMessage(caught));
+    }
+  }, [reportTracks]);
+
   useEffect(() => {
     if (!membership) {
       return;
@@ -214,6 +295,11 @@ export function useRoomMedia(membership: RoomMembership | null) {
           return;
         }
         setLocalStream(local);
+        localStreamRef.current = local;
+        mutedRef.current = false;
+        cameraOnRef.current = true;
+        setMutedState(false);
+        setCameraOnState(true);
 
         const publisher = await publishWhip(current.publishUrl, local);
         if (cancelled) {
@@ -228,12 +314,7 @@ export function useRoomMedia(membership: RoomMembership | null) {
         // Participants will not discover this Stream. Keep the local preview
         // and subscriptions alive and surface the error.
         try {
-          await updateTracks(
-            current.roomCode,
-            current.participantId,
-            reportedTracks(local),
-            current.joinToken,
-          );
+          await reportTracks(true);
         } catch (caught) {
           if (!cancelled) {
             setError(errorMessage(caught));
@@ -269,13 +350,28 @@ export function useRoomMedia(membership: RoomMembership | null) {
         void publisher.close();
       }
       stopTracks(local);
+      localStreamRef.current = null;
+      mutedRef.current = false;
+      cameraOnRef.current = true;
 
       setLocalStream(null);
       setRemoteStreams(new Map());
       setState("idle");
+      setMutedState(false);
+      setCameraOnState(true);
       setError(null);
     };
-  }, [membership, dropSubscription, subscribeTo]);
+  }, [membership, dropSubscription, reportTracks, subscribeTo]);
 
-  return { localStream, remoteStreams, state, error, handleEvent };
+  return {
+    localStream,
+    remoteStreams,
+    state,
+    muted,
+    cameraOn,
+    error,
+    handleEvent,
+    toggleMute,
+    toggleCamera,
+  };
 }

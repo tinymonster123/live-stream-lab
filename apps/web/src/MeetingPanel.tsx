@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import {
   createMeeting,
   getRoom,
+  type JoinOptions,
   joinRoom,
   leaveRoom,
   type Role,
@@ -17,13 +18,18 @@ type ConnectionState = "idle" | "connecting" | "open" | "closed";
 
 type Membership = RoomMembership & {
   role: Role;
+  displayName: string;
 };
+
+/** Enough identity to rejoin after an explicit leave. */
+type RejoinState = Pick<Membership, "roomCode" | "displayName" | "participantId" | "joinToken">;
 
 export function MeetingPanel() {
   const [hostName, setHostName] = useState("");
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [guestName, setGuestName] = useState("");
   const [membership, setMembership] = useState<Membership | null>(null);
+  const [rejoin, setRejoin] = useState<RejoinState | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [connection, setConnection] = useState<ConnectionState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -82,14 +88,15 @@ export function MeetingPanel() {
       .finally(() => setBusy(false));
   }
 
-  async function enterRoom(roomCode: string, displayName: string, hostToken?: string) {
-    const grant = await joinRoom(roomCode, displayName, hostToken);
+  async function enterRoom(roomCode: string, displayName: string, options: JoinOptions = {}) {
+    const grant = await joinRoom(roomCode, displayName, options);
     const status = await getRoom(roomCode, grant.joinToken);
     const me = status.participants.find(
       (participant) => participant.participantId === grant.participantId,
     );
 
     setRoster(status.participants);
+    setRejoin(null);
     setMembership({
       roomCode,
       participantId: grant.participantId,
@@ -97,6 +104,7 @@ export function MeetingPanel() {
       publishUrl: grant.publishUrl,
       subscriptions: grant.subscriptions,
       role: me?.role ?? "guest",
+      displayName,
     });
   }
 
@@ -106,7 +114,7 @@ export function MeetingPanel() {
     run(async () => {
       const meeting = await createMeeting(name);
       setRoomCodeInput(meeting.roomCode);
-      await enterRoom(meeting.roomCode, name, meeting.joinToken);
+      await enterRoom(meeting.roomCode, name, { bearer: meeting.joinToken });
     });
   }
 
@@ -115,12 +123,32 @@ export function MeetingPanel() {
     run(() => enterRoom(roomCodeInput.trim().toUpperCase(), guestName.trim()));
   }
 
+  function handleRejoin() {
+    if (!rejoin) {
+      return;
+    }
+    run(() =>
+      enterRoom(rejoin.roomCode, rejoin.displayName, {
+        bearer: rejoin.joinToken,
+        participantId: rejoin.participantId,
+      }),
+    );
+  }
+
   function handleLeave() {
     if (!membership) {
       return;
     }
+    const leaving = membership;
     run(async () => {
-      await leaveRoom(membership.roomCode, membership.participantId, membership.joinToken);
+      await leaveRoom(leaving.roomCode, leaving.participantId, leaving.joinToken);
+      // Keep the identity so Rejoin reuses the same participantId.
+      setRejoin({
+        roomCode: leaving.roomCode,
+        displayName: leaving.displayName,
+        participantId: leaving.participantId,
+        joinToken: leaving.joinToken,
+      });
       setMembership(null);
       setRoster([]);
       setConnection("idle");
@@ -163,6 +191,15 @@ export function MeetingPanel() {
               Join Room
             </button>
           </form>
+
+          {rejoin && (
+            <p>
+              You left {rejoin.roomCode}.{" "}
+              <button type="button" data-testid="rejoin" onClick={handleRejoin} disabled={busy}>
+                Rejoin as {rejoin.displayName}
+              </button>
+            </p>
+          )}
         </>
       ) : (
         <div>
@@ -173,20 +210,40 @@ export function MeetingPanel() {
             Connection: <strong data-testid="room-connection">{connection}</strong>
           </p>
           <p>
-            You are: <strong>{membership.role === "host" ? "host" : "guest"}</strong>
+            You are: <strong>{membership.role === "host" ? "host" : "guest"}</strong>{" "}
+            <span data-testid="participant-id">{membership.participantId}</span>
           </p>
           <ul data-testid="roster">
-            {roster.map((participant) => (
-              <li key={participant.participantId}>
-                {participant.displayName} ({participant.role})
-                {participant.tracks.length > 0 && (
-                  <span data-testid="roster-tracks">
-                    {" "}
-                    — {participant.tracks.map((track) => track.kind).join(" + ")}
-                  </span>
-                )}
-              </li>
-            ))}
+            {roster.map((participant) => {
+              // The server does not echo a Participant's own Track and mute
+              // events back to them, so the self row reads local media state.
+              const isSelf = participant.participantId === membership.participantId;
+              const participantMuted = isSelf ? media.muted : participant.muted;
+              // An empty Track set means the Participant has not reported yet;
+              // only call the camera off once a publish is visible.
+              const cameraOff = isSelf
+                ? !media.cameraOn
+                : participant.tracks.length > 0 &&
+                  !participant.tracks.some((track) => track.kind === "video");
+              return (
+                <li
+                  key={participant.participantId}
+                  data-testid="roster-entry"
+                  data-participant-id={participant.participantId}
+                  data-muted={participantMuted}
+                >
+                  {participant.displayName} ({participant.role})
+                  {participantMuted && <span data-testid="roster-muted"> — muted</span>}
+                  {cameraOff && <span data-testid="roster-camera-off"> — camera off</span>}
+                  {participant.tracks.length > 0 && (
+                    <span data-testid="roster-tracks">
+                      {" "}
+                      — {participant.tracks.map((track) => track.kind).join(" + ")}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
 
           <div>
@@ -194,6 +251,24 @@ export function MeetingPanel() {
               Media: <strong data-testid="publish-state">{media.state}</strong>
             </p>
             {media.error && <p role="alert">{media.error}</p>}
+            <div>
+              <button
+                type="button"
+                data-testid="mute-toggle"
+                onClick={() => run(media.toggleMute)}
+                disabled={busy || media.state !== "live"}
+              >
+                {media.muted ? "Unmute" : "Mute"}
+              </button>
+              <button
+                type="button"
+                data-testid="camera-toggle"
+                onClick={() => run(media.toggleCamera)}
+                disabled={busy || media.state !== "live"}
+              >
+                {media.cameraOn ? "Camera Off" : "Camera On"}
+              </button>
+            </div>
             <video
               data-testid="local-video"
               autoPlay

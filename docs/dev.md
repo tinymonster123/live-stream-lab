@@ -172,9 +172,10 @@ scripts/soak-broadcast.sh /tmp/fixture.mp4               # 默认 600 秒
 `SRS_CANDIDATE=<Mac LAN IP>`。Meeting 的 WHIP/WHEP 地址保持相对路径，由 Caddy 同源反代；设备访问
 `https://<Mac LAN IP>:8443`。
 
-## Meeting（M2 / T5 + T6）
+## Meeting（M2 / T5–T7）
 
-T5 实现 Room 的控制面生命周期；T6 接入 WHIP 推流、WHEP 订阅、Track 上报和浏览器媒体 UI。
+T5 实现 Room 的控制面生命周期；T6 接入 WHIP 推流、WHEP 订阅、Track 上报和浏览器媒体 UI；
+T7 补上静音、摄像头开关、离开/重入和帧延迟测量。
 
 ```bash
 # 创建 Meeting，得到 roomCode 与 host Join Token
@@ -212,6 +213,13 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PUT \
   -d '{"participantId":"<participantId>","tracks":[
         {"trackId":"camera","kind":"video"},
         {"trackId":"microphone","kind":"audio"}]}'
+
+# 静音 / 取消静音
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT \
+  localhost:8081/api/v1/rooms/<roomCode>/mute \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer <participantJoinToken>' \
+  -d '{"participantId":"<participantId>","muted":true}'
 ```
 
 - Join Token 是 HMAC-SHA256 签名的 `v1.<payload>.<signature>`，claims 包含 room、meeting、
@@ -250,12 +258,51 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PUT \
   服务端 Room 状态仍只在 `leave` 时更新。
 - 页面展示：`local-video`（静音自动播放）和每个远端 Participant 一个 `remote-video-<participantId>`；
   `publish-state` 显示 `idle` / `starting` / `live` / `error`。
+- 静音是 Participant 状态，不是 Track 状态。`PUT /rooms/{code}/mute` 更新 Roster 的 `muted` 并向其他
+  Participant 广播 `mute.changed`；新订阅者在 Roster 重放之后会收到一次 `mute.changed`。媒体面不重新
+  协商：发送端把麦克风 Track 的 `enabled` 设为 `false`，继续推 Track 但发送静音。
+- 摄像头开关复用 Track 上报：关闭时从 Track 集合去掉 `camera` 并广播 `track.unpublished`，本地视频
+  Track 的 `enabled` 设为 `false`，发送端继续发送黑帧；打开时重新上报 `camera`。WHIP Stream 和 WHEP
+  订阅全程不断开，远端画面变黑/恢复，不需要重新协商 SDP。
+- 显式 Leave 后，浏览器保留 participant token 并显示 Rejoin。控制面在 Roster 中找不到该
+  `participantId` 时，按 Join Token 的 claims 原样重建条目；网络掉线后的重入仍走原路径（清空 Track
+  和 muted 状态并广播一次 `participant.joined`）。心跳与超时检测属于 T8。
+- 页面内的 Mute/Unmute 与 Camera Off/On 按钮只在 `publish-state` 为 `live` 时可用；控制面请求失败会
+  回滚本地 Track 状态并显示错误。
 - 浏览器验证：`pnpm exec nx run web:dev`，一个标签页 Create Meeting，另一个标签页填 Room Code +
   名字 Join Room；两边 Roster 实时更新，并各自看到本地预览和对方的画面。
-- 授权：T6 不要求媒体鉴权。任何知道 Room Code 的人都能加入和推流；SRS callback / `AccessPolicy`
-  尚未接入（T7/T8 再处理）。
+- 授权：当前不要求媒体鉴权。任何知道 Room Code 的人都能加入和推流；SRS callback / `AccessPolicy`
+  尚未接入。
 - `ultra-low`（Broadcast 的 WHEP 播放）仍未实现，创建 Broadcast 时返回 400；本切片只把 WHEP 用在
   Meeting 订阅。
+
+### 1:1 验收与延迟测量
+
+`apps/web/e2e/meeting.spec.ts` 用两个独立的 `browser.newContext()` 覆盖 1:1：
+
+- 双向发布/订阅，两端都解码出远端视频与音频。
+- 静音/取消静音后，远端 Roster 的 `muted` 与提示同步，且远端解码出的音频从有声音变为静音再恢复
+  （Web Audio 采样峰值）。
+- 摄像头关闭后，远端视频从有画面变为黑帧（采样亮度），再开启后恢复；Roster 同时显示 camera off。
+- Leave 后点 Rejoin，`participantId` 与离开前一致，对端重新看到画面。
+- 帧延迟测量。
+
+延迟测量不用 `requestVideoFrameCallback` 的 `captureTime`：SRS 不转发 absolute capture time 扩展，
+Chromium 只给出 `receiveTime`。测试改为内容计时：`e2e/fixtures/frame-clock.ts` 生成 320x240、30fps、
+256 帧的 Y4M，每帧用 8 个黑白块编码帧序号；Playwright 用 `--use-file-for-fake-video-capture` 把它
+作为假摄像头。测试同时读取发布端本地预览与订阅端远端画面的序号，差值即采集 → 编码 → SRS → 抖动
+缓冲 → 解码 → 渲染的延迟（不含显示扫描，量化到 1 帧）。fixture 首次运行生成到
+`/tmp/livelab-frame-clock-v1.y4m`。测试先验证发布端与订阅端的帧时钟在 1 秒内各前进约 30 帧，再断言
+中位数与 p90 都低于 500ms；localhost 上中位数通常为 0–33ms。
+
+只跑延迟用例：
+
+```bash
+cd apps/web && pnpm exec playwright test --grep "frame latency"
+```
+
+自动测量在单机完成；局域网跨设备复核仍按 Caddy HTTPS 的步骤，用两台设备加入同一 Room。局域网 RTT
+通常小于 1ms，单机读数与 LAN 读数接近，但本仓库没有自动化跨设备测试。
 
 ## 原生应用
 
@@ -320,8 +367,9 @@ pnpm lint
 ```
 
 `web:e2e` 的 Playwright webServer 会启动 Vite、控制面和 SRS。SRS 使用 `scripts/compose.sh up srs`
-前台运行，Playwright 结束时一并停止容器；本机已在跑 SRS 时直接复用。测试用 Chromium 的假摄像头/
-麦克风（`--use-fake-device-for-media-stream`），断言本地预览和远端视频都解码出非零尺寸。
+前台运行，Playwright 结束时一并停止容器；本机已在跑 SRS 时直接复用。测试用 Chromium 的假麦克风
+（`--use-fake-device-for-media-stream`）和由 `e2e/fixtures/frame-clock.ts` 生成的假摄像头，断言本地
+预览、远端视频/音频、静音、摄像头开关、重入和帧延迟。
 
 ## 契约
 

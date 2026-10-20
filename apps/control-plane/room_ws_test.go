@@ -162,6 +162,100 @@ func TestWebSocketReplaysPublishedTracksToNewSubscriber(t *testing.T) {
 	}
 }
 
+func readMuteChangedEvent(t *testing.T, conn *websocket.Conn) MuteChangedEvent {
+	t.Helper()
+
+	var event MuteChangedEvent
+	if err := json.Unmarshal(readRawEvent(t, conn), &event); err != nil {
+		t.Fatalf("decode mute.changed event: %v", err)
+	}
+	return event
+}
+
+func TestWebSocketBroadcastsMuteChanges(t *testing.T) {
+	rooms := newTestRoomSession()
+	server := httptest.NewServer(newMux(newTestService(&fakeRunner{}), rooms))
+	defer server.Close()
+
+	meeting := createMeeting(t, rooms, "Alice")
+	host := joinRoom(t, rooms, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, rooms, meeting.RoomCode, "Bob", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(
+		ctx,
+		roomSocketURL(server.URL, meeting.RoomCode, host.JoinToken),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	if replay := readJoinedEvent(t, conn); replay.ParticipantId != guest.ParticipantId {
+		t.Fatalf("roster replay = %+v, want the guest", replay)
+	}
+
+	if err := rooms.UpdateMute(meeting.RoomCode, RoomMuteUpdate{
+		ParticipantId: guest.ParticipantId,
+		Muted:         true,
+	}, guest.JoinToken); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+	muted := readMuteChangedEvent(t, conn)
+	if muted.ParticipantId != guest.ParticipantId || !muted.Muted {
+		t.Fatalf("mute event = %+v", muted)
+	}
+
+	if err := rooms.UpdateMute(meeting.RoomCode, RoomMuteUpdate{
+		ParticipantId: guest.ParticipantId,
+		Muted:         false,
+	}, guest.JoinToken); err != nil {
+		t.Fatalf("unmute: %v", err)
+	}
+	unmuted := readMuteChangedEvent(t, conn)
+	if unmuted.ParticipantId != guest.ParticipantId || unmuted.Muted {
+		t.Fatalf("unmute event = %+v", unmuted)
+	}
+}
+
+func TestWebSocketReplaysMuteStateToNewSubscriber(t *testing.T) {
+	rooms := newTestRoomSession()
+	server := httptest.NewServer(newMux(newTestService(&fakeRunner{}), rooms))
+	defer server.Close()
+
+	meeting := createMeeting(t, rooms, "Alice")
+	host := joinRoom(t, rooms, meeting.RoomCode, "Alice", meeting.JoinToken)
+	guest := joinRoom(t, rooms, meeting.RoomCode, "Bob", "")
+	if err := rooms.UpdateMute(meeting.RoomCode, RoomMuteUpdate{
+		ParticipantId: guest.ParticipantId,
+		Muted:         true,
+	}, guest.JoinToken); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(
+		ctx,
+		roomSocketURL(server.URL, meeting.RoomCode, host.JoinToken),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	if joined := readJoinedEvent(t, conn); joined.ParticipantId != guest.ParticipantId {
+		t.Fatalf("joined replay = %+v, want the guest", joined)
+	}
+	muted := readMuteChangedEvent(t, conn)
+	if muted.ParticipantId != guest.ParticipantId || !muted.Muted {
+		t.Fatalf("mute replay = %+v", muted)
+	}
+}
+
 func TestWebSocketRejectsUnusableTokens(t *testing.T) {
 	rooms := newTestRoomSession()
 	server := httptest.NewServer(newMux(newTestService(&fakeRunner{}), rooms))

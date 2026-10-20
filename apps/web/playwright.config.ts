@@ -1,7 +1,16 @@
+import { existsSync } from "node:fs";
 import { defineConfig } from "@playwright/test";
+import { writeFrameClock } from "./e2e/fixtures/frame-clock";
 
 const port = 4173;
 const baseURL = `http://127.0.0.1:${port}`;
+
+// The latency test needs frames that identify themselves. Generate the fake
+// camera once per machine; every Worker shares the same launch arguments.
+const frameClockPath = "/tmp/livelab-frame-clock-v1.y4m";
+if (!existsSync(frameClockPath)) {
+  writeFrameClock(frameClockPath);
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -12,14 +21,16 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "on-first-retry",
-    // Deterministic camera/microphone for the WHIP publish test. Chromium
-    // generates a synthetic test pattern and sine tone.
+    // Deterministic camera/microphone for the WHIP publish test. The video
+    // device plays a file whose frames carry their index; audio stays the
+    // synthetic tone from the fake device.
     permissions: ["camera", "microphone"],
     launchOptions: {
       args: [
         "--use-fake-device-for-media-stream",
         "--use-fake-ui-for-media-stream",
         "--autoplay-policy=no-user-gesture-required",
+        `--use-file-for-fake-video-capture=${frameClockPath}`,
       ],
     },
   },
