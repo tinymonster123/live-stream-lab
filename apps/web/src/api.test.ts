@@ -3,7 +3,14 @@ import {
   ApiError,
   type BroadcastSession,
   createBroadcast,
+  createMeeting,
   getBroadcast,
+  getRoom,
+  type JoinGrant,
+  joinRoom,
+  leaveRoom,
+  type MeetingCreated,
+  type RoomStatus,
   startBroadcast,
   stopBroadcast,
 } from "./api";
@@ -37,6 +44,107 @@ function mockFetch(body: unknown, status = 200) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+const meeting: MeetingCreated = {
+  meetingId: "m1",
+  roomCode: "ABC234",
+  joinToken: "host-token",
+  expiresAt: "2026-10-20T12:00:00Z",
+};
+
+const grant: JoinGrant = {
+  participantId: "p1",
+  joinToken: "participant-token",
+  publishUrl: "http://127.0.0.1:8080/rtc/v1/whip/?app=live&stream=p1",
+  subscriptions: [],
+};
+
+const room: RoomStatus = {
+  roomCode: "ABC234",
+  state: "open",
+  participants: [
+    {
+      participantId: "p1",
+      displayName: "Alice",
+      role: "host",
+      tracks: [],
+    },
+  ],
+};
+
+describe("meeting api", () => {
+  it("creates a meeting with the host name", async () => {
+    const fetchMock = mockFetch(meeting, 201);
+
+    await createMeeting("Alice");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/meetings",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ hostDisplayName: "Alice" }),
+      }),
+    );
+  });
+
+  it("joins with the host token when one is provided", async () => {
+    const fetchMock = mockFetch(grant);
+
+    await joinRoom("ABC234", "Alice", "host-token");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/rooms/ABC234/join",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ displayName: "Alice" }),
+        headers: expect.objectContaining({ Authorization: "Bearer host-token" }),
+      }),
+    );
+  });
+
+  it("joins anonymously without a host token", async () => {
+    const fetchMock = mockFetch(grant);
+
+    await joinRoom("ABC234", "Bob");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/rooms/ABC234/join",
+      expect.objectContaining({
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+
+  it("reads the roster with the participant token", async () => {
+    const fetchMock = mockFetch(room);
+
+    const status = await getRoom("ABC234", "participant-token");
+
+    expect(status.participants).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/rooms/ABC234",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer participant-token" }),
+      }),
+    );
+  });
+
+  it("leaves with the participant token and accepts 204", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(leaveRoom("ABC234", "p1", "participant-token")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/rooms/ABC234/leave",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ participantId: "p1" }),
+        headers: expect.objectContaining({ Authorization: "Bearer participant-token" }),
+      }),
+    );
+  });
 });
 
 describe("broadcast api", () => {

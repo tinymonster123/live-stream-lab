@@ -2,3 +2,7 @@ package: main
 output: apps/control-plane/models.gen.go
 generate:
   models: true
+output-options:
+  # The WebSocket schemas are only referenced from x-websocket, so the default
+  # pruning would omit them. Keep every declared schema in the generated models.
+  skip-prune: true

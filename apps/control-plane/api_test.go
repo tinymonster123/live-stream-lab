@@ -8,12 +8,28 @@ import (
 	"testing"
 )
 
+func newTestMux() *http.ServeMux {
+	return newMux(newTestService(&fakeRunner{}), newTestRoomSession())
+}
+
 func performRequest(t *testing.T, mux *http.ServeMux, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return performAuthorizedRequest(t, mux, method, path, body, "")
+}
+
+func performAuthorizedRequest(
+	t *testing.T,
+	mux *http.ServeMux,
+	method, path, body, token string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
@@ -22,16 +38,11 @@ func performRequest(t *testing.T, mux *http.ServeMux, method, path, body string)
 
 func decodeSession(t *testing.T, recorder *httptest.ResponseRecorder) BroadcastSession {
 	t.Helper()
-
-	var session BroadcastSession
-	if err := json.Unmarshal(recorder.Body.Bytes(), &session); err != nil {
-		t.Fatalf("decode session: %v (body %s)", err, recorder.Body.String())
-	}
-	return session
+	return decodeJSONBody[BroadcastSession](t, recorder)
 }
 
 func TestCreateBroadcastEndpoint(t *testing.T) {
-	mux := newMux(newTestService(&fakeRunner{}))
+	mux := newTestMux()
 	body := `{"source":{"type":"file","path":"/tmp/fixture.mp4","loop":true},"latencyClass":"low"}`
 
 	recorder := performRequest(t, mux, http.MethodPost, "/api/v1/broadcasts", body)
@@ -52,7 +63,7 @@ func TestCreateBroadcastEndpoint(t *testing.T) {
 }
 
 func TestBroadcastLifecycleEndpoints(t *testing.T) {
-	mux := newMux(newTestService(&fakeRunner{}))
+	mux := newTestMux()
 	created := decodeSession(t, performRequest(
 		t, mux, http.MethodPost, "/api/v1/broadcasts",
 		`{"source":{"type":"file","path":"/tmp/fixture.mp4"},"latencyClass":"low"}`,
@@ -95,7 +106,7 @@ func TestBroadcastLifecycleEndpoints(t *testing.T) {
 }
 
 func TestCreateBroadcastWithStandardLatencyReturnsHLS(t *testing.T) {
-	mux := newMux(newTestService(&fakeRunner{}))
+	mux := newTestMux()
 	body := `{"source":{"type":"file","path":"/tmp/fixture.mp4"},"latencyClass":"standard"}`
 
 	recorder := performRequest(t, mux, http.MethodPost, "/api/v1/broadcasts", body)
@@ -114,7 +125,7 @@ func TestCreateBroadcastWithStandardLatencyReturnsHLS(t *testing.T) {
 
 func TestGetBroadcastReportsViewerCount(t *testing.T) {
 	probe := &fakeProbe{viewers: 5}
-	mux := newMux(NewBroadcastService(&fakeRunner{}, probe, testConfig()))
+	mux := newMux(NewBroadcastService(&fakeRunner{}, probe, testConfig()), newTestRoomSession())
 	created := decodeSession(t, performRequest(
 		t, mux, http.MethodPost, "/api/v1/broadcasts",
 		`{"source":{"type":"file","path":"/tmp/fixture.mp4"},"latencyClass":"low"}`,
@@ -139,7 +150,7 @@ func TestGetBroadcastReportsViewerCount(t *testing.T) {
 }
 
 func TestUnknownBroadcastReturnsNotFound(t *testing.T) {
-	mux := newMux(newTestService(&fakeRunner{}))
+	mux := newTestMux()
 
 	for _, test := range []struct {
 		method string
@@ -158,7 +169,7 @@ func TestUnknownBroadcastReturnsNotFound(t *testing.T) {
 }
 
 func TestInvalidCreateRequestReturnsBadRequest(t *testing.T) {
-	mux := newMux(newTestService(&fakeRunner{}))
+	mux := newTestMux()
 
 	for _, body := range []string{
 		`{`,
@@ -166,6 +177,148 @@ func TestInvalidCreateRequestReturnsBadRequest(t *testing.T) {
 		`{"source":{"type":"file"},"latencyClass":"low"}`,
 	} {
 		recorder := performRequest(t, mux, http.MethodPost, "/api/v1/broadcasts", body)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", body, recorder.Code)
+		}
+	}
+}
+
+func decodeJSONBody[T any](t *testing.T, recorder *httptest.ResponseRecorder) T {
+	t.Helper()
+
+	var body T
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v (body %s)", err, recorder.Body.String())
+	}
+	return body
+}
+
+func TestMeetingLifecycleEndpoints(t *testing.T) {
+	mux := newTestMux()
+
+	created := performRequest(t, mux, http.MethodPost, "/api/v1/meetings", `{"hostDisplayName":"Alice"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (body %s)", created.Code, created.Body.String())
+	}
+	meeting := decodeJSONBody[MeetingCreated](t, created)
+	if meeting.RoomCode == "" || meeting.JoinToken == "" || meeting.MeetingId == "" {
+		t.Fatalf("meeting = %+v", meeting)
+	}
+	path := "/api/v1/rooms/" + meeting.RoomCode
+
+	hostResponse := performAuthorizedRequest(
+		t, mux, http.MethodPost, path+"/join", `{"displayName":"Alice"}`, meeting.JoinToken,
+	)
+	if hostResponse.Code != http.StatusOK {
+		t.Fatalf("host join status = %d (body %s)", hostResponse.Code, hostResponse.Body.String())
+	}
+	host := decodeJSONBody[JoinGrant](t, hostResponse)
+	if host.ParticipantId == "" || host.JoinToken == "" || host.PublishUrl == "" {
+		t.Fatalf("host grant = %+v", host)
+	}
+	if host.Subscriptions == nil {
+		t.Fatal("host subscriptions is nil, want an empty array")
+	}
+
+	guestResponse := performRequest(
+		t, mux, http.MethodPost, path+"/join", `{"displayName":"Bob"}`,
+	)
+	if guestResponse.Code != http.StatusOK {
+		t.Fatalf("guest join status = %d (body %s)", guestResponse.Code, guestResponse.Body.String())
+	}
+	guest := decodeJSONBody[JoinGrant](t, guestResponse)
+
+	statusResponse := performAuthorizedRequest(t, mux, http.MethodGet, path, "", host.JoinToken)
+	if statusResponse.Code != http.StatusOK {
+		t.Fatalf("status code = %d (body %s)", statusResponse.Code, statusResponse.Body.String())
+	}
+	status := decodeJSONBody[RoomStatus](t, statusResponse)
+	if status.State != Open || len(status.Participants) != 2 {
+		t.Fatalf("status = %+v, want open with 2 participants", status)
+	}
+
+	leaveResponse := performAuthorizedRequest(
+		t,
+		mux,
+		http.MethodPost,
+		path+"/leave",
+		`{"participantId":"`+guest.ParticipantId+`"}`,
+		guest.JoinToken,
+	)
+	if leaveResponse.Code != http.StatusNoContent {
+		t.Fatalf("leave status = %d, want 204 (body %s)", leaveResponse.Code, leaveResponse.Body.String())
+	}
+
+	statusResponse = performAuthorizedRequest(t, mux, http.MethodGet, path, "", host.JoinToken)
+	status = decodeJSONBody[RoomStatus](t, statusResponse)
+	if len(status.Participants) != 1 || status.Participants[0].DisplayName != "Alice" {
+		t.Fatalf("participants after leave = %+v", status.Participants)
+	}
+}
+
+func TestRoomEndpointsRequireAValidJoinToken(t *testing.T) {
+	mux := newTestMux()
+	meeting := decodeJSONBody[MeetingCreated](t, performRequest(
+		t, mux, http.MethodPost, "/api/v1/meetings", `{"hostDisplayName":"Alice"}`,
+	))
+	path := "/api/v1/rooms/" + meeting.RoomCode
+	host := decodeJSONBody[JoinGrant](t, performAuthorizedRequest(
+		t, mux, http.MethodPost, path+"/join", `{"displayName":"Alice"}`, meeting.JoinToken,
+	))
+
+	status := performRequest(t, mux, http.MethodGet, path, "")
+	if status.Code != http.StatusForbidden {
+		t.Fatalf("status without token = %d, want 403", status.Code)
+	}
+	assertErrorCode(t, status, "forbidden")
+
+	hostTokenStatus := performAuthorizedRequest(t, mux, http.MethodGet, path, "", meeting.JoinToken)
+	if hostTokenStatus.Code != http.StatusForbidden {
+		t.Fatalf("status with the meeting host token = %d, want 403", hostTokenStatus.Code)
+	}
+
+	leave := performAuthorizedRequest(t, mux, http.MethodPost, path+"/leave",
+		`{"participantId":"`+host.ParticipantId+`"}`, "not-a-token")
+	if leave.Code != http.StatusForbidden {
+		t.Fatalf("leave with bad token = %d, want 403", leave.Code)
+	}
+
+	join := performAuthorizedRequest(t, mux, http.MethodPost, path+"/join",
+		`{"displayName":"Bob"}`, "not-a-token")
+	if join.Code != http.StatusForbidden {
+		t.Fatalf("join with bad token = %d, want 403", join.Code)
+	}
+}
+
+func TestUnknownRoomEndpoints(t *testing.T) {
+	mux := newTestMux()
+
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/v1/rooms/ZZZZZZ/join", `{"displayName":"Bob"}`},
+		{http.MethodGet, "/api/v1/rooms/ZZZZZZ", ""},
+		{http.MethodPost, "/api/v1/rooms/ZZZZZZ/leave", `{"participantId":"p1"}`},
+	} {
+		recorder := performRequest(t, mux, request.method, request.path, request.body)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status = %d, want 404 (body %s)",
+				request.method, request.path, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestMeetingCreateValidation(t *testing.T) {
+	mux := newTestMux()
+
+	for _, body := range []string{
+		`{`,
+		`{}`,
+		`{"hostDisplayName":"  "}`,
+	} {
+		recorder := performRequest(t, mux, http.MethodPost, "/api/v1/meetings", body)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("body %s: status = %d, want 400", body, recorder.Code)
 		}

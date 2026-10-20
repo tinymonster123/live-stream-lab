@@ -51,6 +51,8 @@ Participant A ──WHIP──► SRS SFU ──WHEP──► Participant B
 ```
 
 - M1 用 `StreamSession`；M2+ 增加 `RoomSession`。
+- T5 已实现 `RoomSession`、Room Actor、Roster、Join Token 和 WebSocket 的
+  `participant.joined` / `participant.left`；媒体仍是占位，WHIP/WHEP 与订阅列表在 T6。
 - `RoomSession`：Room 的控制面生命周期；拥有 Participant、Subscription、录制编排。
 - `Room Actor`：每个 Room 一个 goroutine，串行处理 join/leave/mute/subscribe。
 - `Signaling`：WebSocket 房间事件 + WHIP/WHEP 订阅列表；不自己交换 SDP。
@@ -189,8 +191,8 @@ interface Telemetry {
 | 模块 | 缺失后果 |
 |---|---|
 | `StreamSession` | 开播逻辑散落在 UI/脚本/API，状态不一致，失败无法回收 |
-| `RoomSession` + `Room Actor` | 房间状态、订阅扇出、断线重连没有归属 |
-| `Signaling` | 客户端不知道发布/订阅哪些 Stream |
+| `RoomSession` + `Room Actor` | 房间状态、订阅扇出、断线重连没有归属；T5 已实现 Roster 与 join/leave，断线重连在 T8 |
+| `Signaling` | 客户端不知道发布/订阅哪些 Stream；T5 已实现 Roster 事件，订阅列表在 T6 |
 | `MeetingRecorder` | 无法按 Participant 落盘，AI 没有输入 |
 | `AIJobQueue` + `ArtifactStore` | AI 与录制链路断开，产物不可查 |
 | `CaptureSource` | 换设备要改命令行；权限问题运行时才爆 |

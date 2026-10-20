@@ -115,7 +115,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Join a Room with a Room Code */
+        /**
+         * Join a Room with a Room Code
+         * @description Anonymous by default. Present the Meeting's host Join Token as a Bearer token to join as the host.
+         */
         post: operations["joinRoom"];
         delete?: never;
         options?: never;
@@ -292,6 +295,7 @@ export interface components {
         MeetingCreated: {
             meetingId: string;
             roomCode: string;
+            /** @description Host Join Token; present it as a Bearer token when the host joins */
             joinToken: string;
             /** Format: date-time */
             expiresAt: string;
@@ -303,9 +307,11 @@ export interface components {
         };
         JoinGrant: {
             participantId: string;
+            /** @description Participant Join Token for Room status, leave, and the WebSocket handshake */
             joinToken: string;
-            /** @description WHIP endpoint for this Participant */
+            /** @description Placeholder WHIP endpoint for this Participant until the media adapter lands in T6 */
             publishUrl: string;
+            /** @description Placeholder subscription list; empty until the media adapter lands in T6 */
             subscriptions: components["schemas"]["SubscriptionTarget"][];
         };
         SubscriptionTarget: {
@@ -322,11 +328,12 @@ export interface components {
             state: "open" | "closing" | "closed";
             participants: components["schemas"]["RosterEntry"][];
         };
+        /** @enum {string} */
+        RosterEntryRole: "host" | "guest";
         RosterEntry: {
             participantId: string;
             displayName: string;
-            /** @enum {string} */
-            role: "host" | "guest";
+            role: components["schemas"]["RosterEntryRole"];
             muted?: boolean;
             tracks: components["schemas"]["TrackSummary"][];
         };
@@ -382,8 +389,7 @@ export interface components {
             type: "participant.joined";
             participantId: string;
             displayName: string;
-            /** @enum {string} */
-            role: "host" | "guest";
+            role: components["schemas"]["RosterEntryRole"];
         };
         ParticipantLeftEvent: {
             /** @constant */
@@ -689,6 +695,7 @@ export interface operations {
                     "application/json": components["schemas"]["RoomStatus"];
                 };
             };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

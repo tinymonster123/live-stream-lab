@@ -134,9 +134,64 @@ scripts/soak-broadcast.sh /tmp/fixture.mp4               # 默认 600 秒
 | `SRS_HLS_BASE` | `http://127.0.0.1:8080/live` | HLS 播放基地址 |
 | `SRS_API_BASE` | `http://127.0.0.1:1985` | SRS HTTP API：确认 Stream 已开始推流、踢掉发布者、查询观众数；设为空可跳过确认 |
 | `FFMPEG_BIN` | `ffmpeg` | FFmpeg 可执行文件 |
+| `SRS_WHIP_BASE` | `http://127.0.0.1:8080/rtc/v1/whip/` | Join 返回的占位 WHIP 地址 |
+| `JOIN_TOKEN_SECRET` | 每次启动随机生成 | Join Token 的 HMAC 密钥；设置后 token 可跨重启校验，但 Room 仍会丢失 |
 
 局域网观看时，把 `SRS_FLV_BASE`、`SRS_HLS_BASE` 改成 `http://<Mac LAN IP>:8080/live` 并设置
 `SRS_CANDIDATE=<Mac LAN IP>`。
+
+## Meeting（M2 / T5）
+
+T5 实现 Room 的控制面生命周期；媒体仍是占位，WHIP/WHEP 在 T6 接入。
+
+```bash
+# 创建 Meeting，得到 roomCode 与 host Join Token
+curl -s -X POST localhost:8081/api/v1/meetings \
+  -H 'content-type: application/json' \
+  -d '{"hostDisplayName":"Alice"}'
+
+# 主持人加入：Meeting 的 Join Token 放在 Authorization 头
+curl -s -X POST localhost:8081/api/v1/rooms/<roomCode>/join \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer <meetingJoinToken>' \
+  -d '{"displayName":"Alice"}'
+
+# 访客加入：只需要 Room Code + display name
+curl -s -X POST localhost:8081/api/v1/rooms/<roomCode>/join \
+  -H 'content-type: application/json' \
+  -d '{"displayName":"Bob"}'
+
+# 查询 Roster（用 join 返回的 participant Join Token）
+curl -s -H 'Authorization: Bearer <participantJoinToken>' \
+  localhost:8081/api/v1/rooms/<roomCode>
+
+# 离开
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  localhost:8081/api/v1/rooms/<roomCode>/leave \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer <participantJoinToken>' \
+  -d '{"participantId":"<participantId>"}'
+```
+
+- Join Token 是 HMAC-SHA256 签名的 `v1.<payload>.<signature>`，claims 包含 room、meeting、
+  participant、role 和过期时间；每个 token 与一个 Room 绑定。
+- Meeting 返回的 token 是 host token（没有 participantId）；join 返回 participant token。
+  participant token 用于 Room status、leave 和 WebSocket。
+- 缺少、伪造或过期的 token 会让 status/leave/WS 返回 403；Meeting 的 host token 也不能读取 Roster，
+  必须先 join 换成 participant token。Room 默认 2 小时后关闭，token 与 Room 同时过期。Room 状态
+  保存在内存中，控制面重启会丢失。
+- 带 participant token 和 `participantId` 的 join 会复用身份，并广播一次 `participant.joined`
+  （用于改名或断线后重入）。
+- WebSocket：`ws://127.0.0.1:8081/api/v1/rooms/<roomCode>/ws?joinToken=<participantJoinToken>`，
+  服务端推送 `participant.joined` / `participant.left`。新订阅者连接后，服务端会先重放当前 Roster
+  里其他 Participant 的 `participant.joined`，补上 join 与订阅之间的事件。Vite 的 `/api` 代理已开启
+  `ws: true`。token 位于查询串，会出现在访问日志中；本地实验台允许任意 Origin，生产路由由 Caddy
+  同源接管。
+- 每个 Room 的 actor 与进程同生命周期；过期 Room 暂不做后台回收（T8 处理）。
+- `publishUrl` 和 `subscriptions` 目前是占位：`publishUrl` 使用 SRS WHIP 的 URL 形状，
+  `subscriptions` 是空数组；T6 接入真实媒体。
+- 浏览器验证：`pnpm exec nx run web:dev`，一个标签页 Create Meeting，另一个标签页填 Room Code +
+  名字 Join Room；两边 Roster 会实时更新。
 
 ## 原生应用
 

@@ -152,6 +152,8 @@
         "tags": ["meetings"],
         "operationId": "joinRoom",
         "summary": "Join a Room with a Room Code",
+        "description": "Anonymous by default. Present the Meeting's host Join Token as a Bearer token to join as the host.",
+        "security": [{}, { "joinToken": [] }],
         "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
         "requestBody": {
           "required": true,
@@ -180,6 +182,7 @@
         "tags": ["meetings"],
         "operationId": "leaveRoom",
         "summary": "Leave a Room",
+        "security": [{ "joinToken": [] }],
         "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
         "requestBody": {
           "required": true,
@@ -201,6 +204,7 @@
         "tags": ["meetings"],
         "operationId": "getRoomStatus",
         "summary": "Get Room status and Roster",
+        "security": [{ "joinToken": [] }],
         "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
         "responses": {
           "200": {
@@ -211,6 +215,7 @@
               }
             }
           },
+          "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -289,6 +294,13 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "joinToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "HMAC-signed Join Token issued for one Participant and Room. Required for Room status, leave, and the WebSocket handshake; optional on join when using the Meeting's host token."
+      }
+    },
     "parameters": {
       "BroadcastId": {
         "name": "broadcastId",
@@ -454,7 +466,10 @@
         "properties": {
           "meetingId": { "type": "string" },
           "roomCode": { "type": "string" },
-          "joinToken": { "type": "string" },
+          "joinToken": {
+            "type": "string",
+            "description": "Host Join Token; present it as a Bearer token when the host joins"
+          },
           "expiresAt": { "type": "string", "format": "date-time" }
         }
       },
@@ -476,10 +491,17 @@
         "required": ["participantId", "joinToken", "publishUrl", "subscriptions"],
         "properties": {
           "participantId": { "type": "string" },
-          "joinToken": { "type": "string" },
-          "publishUrl": { "type": "string", "description": "WHIP endpoint for this Participant" },
+          "joinToken": {
+            "type": "string",
+            "description": "Participant Join Token for Room status, leave, and the WebSocket handshake"
+          },
+          "publishUrl": {
+            "type": "string",
+            "description": "Placeholder WHIP endpoint for this Participant until the media adapter lands in T6"
+          },
           "subscriptions": {
             "type": "array",
+            "description": "Placeholder subscription list; empty until the media adapter lands in T6",
             "items": { "$ref": "#/components/schemas/SubscriptionTarget" }
           }
         }
@@ -515,6 +537,10 @@
           }
         }
       },
+      "RosterEntryRole": {
+        "type": "string",
+        "enum": ["host", "guest"]
+      },
       "RosterEntry": {
         "type": "object",
         "additionalProperties": false,
@@ -522,7 +548,7 @@
         "properties": {
           "participantId": { "type": "string" },
           "displayName": { "type": "string" },
-          "role": { "type": "string", "enum": ["host", "guest"] },
+          "role": { "$ref": "#/components/schemas/RosterEntryRole" },
           "muted": { "type": "boolean" },
           "tracks": {
             "type": "array",
@@ -643,7 +669,7 @@
           "type": { "const": "participant.joined" },
           "participantId": { "type": "string" },
           "displayName": { "type": "string" },
-          "role": { "type": "string", "enum": ["host", "guest"] }
+          "role": { "$ref": "#/components/schemas/RosterEntryRole" }
         }
       },
       "ParticipantLeftEvent": {
@@ -716,7 +742,7 @@
     "queryParameters": {
       "joinToken": { "type": "string", "required": true }
     },
-    "description": "Room signaling channel. The client sends heartbeats and subscription changes; the server pushes WsEvent messages. SDP is exchanged through WHIP/WHEP, not here.",
+    "description": "Room signaling channel. The client sends heartbeats and subscription changes; the server pushes WsEvent messages. SDP is exchanged through WHIP/WHEP, not here. An invalid or expired joinToken is rejected with HTTP 403 before the upgrade.",
     "messageSchema": { "$ref": "#/components/schemas/WsEvent" }
   }
 }

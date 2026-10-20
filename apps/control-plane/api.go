@@ -10,13 +10,19 @@ import (
 
 const maxRequestBytes = 1 << 20
 
-func newMux(service *BroadcastService) *http.ServeMux {
+func newMux(broadcasts *BroadcastService, rooms *RoomSession) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealth)
-	mux.HandleFunc("POST /api/v1/broadcasts", service.handleCreateBroadcast)
-	mux.HandleFunc("GET /api/v1/broadcasts/{broadcastId}", service.handleBroadcastStatus)
-	mux.HandleFunc("POST /api/v1/broadcasts/{broadcastId}/start", service.handleStartBroadcast)
-	mux.HandleFunc("POST /api/v1/broadcasts/{broadcastId}/stop", service.handleStopBroadcast)
+	mux.HandleFunc("POST /api/v1/broadcasts", broadcasts.handleCreateBroadcast)
+	mux.HandleFunc("GET /api/v1/broadcasts/{broadcastId}", broadcasts.handleBroadcastStatus)
+	mux.HandleFunc("POST /api/v1/broadcasts/{broadcastId}/start", broadcasts.handleStartBroadcast)
+	mux.HandleFunc("POST /api/v1/broadcasts/{broadcastId}/stop", broadcasts.handleStopBroadcast)
+
+	mux.HandleFunc("POST /api/v1/meetings", rooms.handleCreateMeeting)
+	mux.HandleFunc("GET /api/v1/rooms/{roomCode}", rooms.handleRoomStatus)
+	mux.HandleFunc("POST /api/v1/rooms/{roomCode}/join", rooms.handleJoinRoom)
+	mux.HandleFunc("POST /api/v1/rooms/{roomCode}/leave", rooms.handleLeaveRoom)
+	mux.HandleFunc("GET /api/v1/rooms/{roomCode}/ws", rooms.handleRoomSocket)
 	return mux
 }
 
@@ -86,9 +92,16 @@ func writeError(writer http.ResponseWriter, status int, code, message string) {
 
 func writeServiceError(writer http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrRoomNotFound):
 		writeError(writer, http.StatusNotFound, "not_found", err.Error())
-	case errors.Is(err, ErrInvalidBroadcast), errors.Is(err, ErrUnsupportedLatency):
+	case errors.Is(err, ErrForbidden),
+		errors.Is(err, ErrInvalidJoinToken),
+		errors.Is(err, ErrExpiredJoinToken),
+		errors.Is(err, ErrRoomClosed):
+		writeError(writer, http.StatusForbidden, "forbidden", err.Error())
+	case errors.Is(err, ErrInvalidBroadcast),
+		errors.Is(err, ErrUnsupportedLatency),
+		errors.Is(err, ErrInvalidRoomRequest):
 		writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
 	default:
 		log.Printf("request failed: %v", err)
