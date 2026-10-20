@@ -1,5 +1,5 @@
-package: main
-output: apps/control-plane/models.gen.go
+package: contracts
+output: apps/control-plane/internal/contracts/models.gen.go
 generate:
   models: true
 output-options:
