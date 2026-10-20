@@ -7,14 +7,14 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "go build -o dist/control-plane .",
+        "command": "go build -o dist/control-plane ./cmd/control-plane",
         "cwd": "apps/control-plane"
       }
     },
     "dev": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "go run .",
+        "command": "go run ./cmd/control-plane",
         "cwd": "apps/control-plane"
       }
     },

@@ -352,7 +352,7 @@ pnpm format      # biome format --write .
 各项目的测试：
 
 - `web`：Vitest，`react-dom/server` 渲染断言，不依赖 jsdom。
-- `control-plane`：`go test ./...`，用 `httptest` 驱动 `newMux()`。
+- `control-plane`：`go test ./...`，`httptest` 驱动的传输层测试在 `internal/api`。
 - `ai-worker`：`uv run --frozen pytest`。
 - `contracts`：`node --test`，校验 OpenAPI 文档结构、内部 `$ref` 和三份 JSON Schema。
 
@@ -414,7 +414,7 @@ pnpm exec nx run contracts:generate  # 重新生成 Go / TypeScript 绑定
 
 `contracts:generate` 产出两个已提交的生成文件：
 
-- `apps/control-plane/models.gen.go`（`oapi-codegen`）
+- `apps/control-plane/internal/contracts/models.gen.go`（`oapi-codegen`）
 - `libs/contracts/generated/api.d.ts`（`openapi-typescript`）
 
 生成物不要手改（ADR-0006）。Go 生成步骤默认使用 `GOPROXY=https://goproxy.cn`，可用同名环境变量覆盖。

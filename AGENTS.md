@@ -36,6 +36,19 @@ WHIP 推流、WHEP 订阅、Track 上报、Caddy HTTPS 与浏览器本地/远端
 
 Spec: [issue #1](https://github.com/tinymonster123/live-stream-lab/issues/1)。
 
+## 代码结构
+
+- `apps/control-plane/cmd/control-plane/main.go`：环境变量、装配与监听；只调用各包构造函数
+- `apps/control-plane/internal/api/`：HTTP / WebSocket 适配层（`router.go`、`respond.go`、`broadcast.go`、`room.go`、`socket.go`）
+- `apps/control-plane/internal/room/`：Room 领域（`session.go`、`actor.go`、`token.go`）
+- `apps/control-plane/internal/broadcast/`：Broadcast 领域（`service.go`、`ffmpeg.go`、`probe.go`、`playback.go`）
+- `apps/control-plane/internal/contracts/`：`contracts:generate` 产出的 Go 模型，不要手改
+- `apps/control-plane/internal/id/`：跨领域共用的随机 ID
+- `apps/web/src/components|hooks|lib/`：React 面板、hook、API 客户端与媒体/播放逻辑
+- `apps/ai-worker/src/ai_worker/`：Python `src` layout
+
+依赖方向固定为 `cmd → api → {room, broadcast} → contracts`；领域包不 import `net/http`。
+
 ## 不变量
 
 - `StreamSession` 拥有 Broadcast 开播生命周期，调用方只用 `start/stop/status`；`RoomSession` 拥有

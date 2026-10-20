@@ -70,6 +70,8 @@ Participant A ──WHIP──► SRS SFU ──WHEP──► Participant B
 - `AIJobQueue`：Redis Streams 生产/消费；消息是 `AI Job`。
 - `ArtifactStore`：Transcript / Summary 的文件与元数据。
 - `JoinToken`：HMAC 签发与校验；SRS callback 只做翻译。
+- Go 实现中，`RoomSession` 是 `internal/room.Session`，Broadcast 是 `internal/broadcast.Service`，
+  HTTP/WS 适配在 `internal/api`；领域包不 import `net/http`。
 
 ```ts
 interface RoomSession {
