@@ -18,6 +18,14 @@ const (
 	defaultWhepBase   = "/rtc/v1/whep/"
 	roomCommandBuffer = 64
 	subscriberBuffer  = 32
+
+	// participantTimeout is how long a Participant may go without a heartbeat
+	// before the Room marks them offline. Clients send one every 5 seconds.
+	participantTimeout = 15 * time.Second
+	// emptyRoomGrace is how long an empty Room stays open before it closes.
+	emptyRoomGrace = 60 * time.Second
+	// roomSweepInterval bounds how late the lifecycle timers fire.
+	roomSweepInterval = time.Second
 )
 
 var (
@@ -34,6 +42,25 @@ type RoomConfig struct {
 	TTL        time.Duration
 }
 
+// clock serializes the time source. Room actors read it from their own
+// goroutines while tests move it, so reads and replacements share a mutex.
+type clock struct {
+	mu  sync.Mutex
+	now func() time.Time
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now()
+}
+
+func (c *clock) Set(now func() time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
+}
+
 // RoomSession owns the Meeting lifecycle: creation, joining, leaving, and the
 // Roster. Each Room runs as an actor so join/leave/subscribe are serialized.
 type RoomSession struct {
@@ -43,7 +70,7 @@ type RoomSession struct {
 	whipBase string
 	whepBase string
 	ttl      time.Duration
-	now      func() time.Time
+	now      clock
 	newID    func() string
 }
 
@@ -66,15 +93,29 @@ func NewRoomSession(config RoomConfig) (*RoomSession, error) {
 		config.WhepBase = defaultWhepBase
 	}
 
-	return &RoomSession{
+	service := &RoomSession{
 		rooms:    make(map[string]*room),
 		signer:   tokenSigner{secret: secret},
 		whipBase: config.WhipBase,
 		whepBase: config.WhepBase,
 		ttl:      config.TTL,
-		now:      time.Now,
+		now:      clock{now: time.Now},
 		newID:    randomID,
-	}, nil
+	}
+	// One ticker advances every Room's lifecycle timers; the Room actors stay
+	// command-driven and serialized.
+	go service.runTimers()
+
+	return service, nil
+}
+
+func (service *RoomSession) runTimers() {
+	ticker := time.NewTicker(roomSweepInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		service.sweep(service.now.Now())
+	}
 }
 
 func (service *RoomSession) Create(request MeetingCreateRequest) (MeetingCreated, error) {
@@ -82,7 +123,7 @@ func (service *RoomSession) Create(request MeetingCreateRequest) (MeetingCreated
 		return MeetingCreated{}, ErrInvalidRoomRequest
 	}
 
-	now := service.now()
+	now := service.now.Now()
 	expiresAt := now.Add(service.ttl)
 
 	service.mu.Lock()
@@ -108,14 +149,16 @@ func (service *RoomSession) Create(request MeetingCreateRequest) (MeetingCreated
 		code:         code,
 		meetingID:    meetingID,
 		expiresAt:    expiresAt,
+		emptySince:   now,
 		whepBase:     service.whepBase,
 		commands:     make(chan any, roomCommandBuffer),
 		participants: make(map[string]*participant),
 		subscribers:  make(map[string]*roomSubscriber),
+		kicked:       make(map[string]struct{}),
 	}
 	service.rooms[code] = created
-	// Read the clock dynamically so tests (and a future fake clock) can move it.
-	go created.run(func() time.Time { return service.now() }, service.newID)
+	// Read the clock through the session clock so tests can move it.
+	go created.run(service.now.Now, service.newID)
 
 	return MeetingCreated{
 		MeetingId: meetingID,
@@ -258,6 +301,28 @@ func (service *RoomSession) UpdateMute(
 	return <-reply
 }
 
+// Heartbeat records that a Participant is still reachable. The signaling
+// socket sends one every 5 seconds; a Participant without one for 15 seconds
+// is marked offline by the Room actor.
+func (service *RoomSession) Heartbeat(roomCode, participantID, bearer string) error {
+	target, err := service.room(roomCode)
+	if err != nil {
+		return err
+	}
+
+	claims, err := service.verifyParticipantToken(bearer, roomCode)
+	if err != nil {
+		return err
+	}
+	if claims.ParticipantID != participantID {
+		return ErrForbidden
+	}
+
+	reply := make(chan error, 1)
+	target.commands <- heartbeatCommand{participantID: participantID, reply: reply}
+	return <-reply
+}
+
 // normalizeTracks validates the reported set and converts it to the Roster's
 // summary shape. Every reported Track is published by definition: to stop
 // publishing one, the caller reports the set without it.
@@ -302,18 +367,70 @@ func (service *RoomSession) Leave(roomCode, participantID, bearer string) error 
 	return <-reply
 }
 
+// Kick removes another Participant from the Room. Only the host may kick, and
+// the removed Participant cannot rejoin with the same participantId. The
+// removal broadcasts participant.left, which closes subscribers' WHEP sessions
+// and the kicked Participant's signaling socket.
+func (service *RoomSession) Kick(roomCode string, request RoomKickRequest, bearer string) error {
+	target, err := service.room(roomCode)
+	if err != nil {
+		return err
+	}
+
+	claims, err := service.verifyParticipantToken(bearer, roomCode)
+	if err != nil {
+		return err
+	}
+	if claims.Role != Host {
+		return ErrForbidden
+	}
+
+	reply := make(chan error, 1)
+	target.commands <- kickCommand{
+		hostID:        claims.ParticipantID,
+		participantID: request.ParticipantId,
+		reply:         reply,
+	}
+	return <-reply
+}
+
+// sweep applies the heartbeat, empty-Room, and expiry timers to every Room.
+// runTimers calls it on a ticker; tests call it directly after moving the
+// clock, which keeps the transitions deterministic.
+func (service *RoomSession) sweep(now time.Time) {
+	service.mu.Lock()
+	rooms := make([]*room, 0, len(service.rooms))
+	for _, target := range service.rooms {
+		rooms = append(rooms, target)
+	}
+	service.mu.Unlock()
+
+	for _, target := range rooms {
+		// A closed Room keeps a tombstone so status can still report closed,
+		// but it no longer needs timer work.
+		if target.closed.Load() {
+			continue
+		}
+		reply := make(chan struct{})
+		target.commands <- sweepCommand{now: now, reply: reply}
+		<-reply
+	}
+}
+
 func (service *RoomSession) Status(roomCode, bearer string) (RoomStatus, error) {
 	target, err := service.room(roomCode)
 	if err != nil {
 		return RoomStatus{}, err
 	}
-	if _, err := service.verifyParticipantToken(bearer, roomCode); err != nil {
+	claims, err := service.verifyParticipantToken(bearer, roomCode)
+	if err != nil {
 		return RoomStatus{}, err
 	}
 
-	reply := make(chan RoomStatus, 1)
-	target.commands <- statusCommand{reply: reply}
-	return <-reply, nil
+	reply := make(chan statusResult, 1)
+	target.commands <- statusCommand{participantID: claims.ParticipantID, reply: reply}
+	result := <-reply
+	return result.status, result.err
 }
 
 // Subscribe authenticates a participant and registers their event stream.
@@ -371,7 +488,7 @@ func (service *RoomSession) verifyToken(raw, roomCode string) (joinClaims, error
 		return joinClaims{}, ErrInvalidJoinToken
 	}
 
-	claims, err := service.signer.verify(raw, service.now())
+	claims, err := service.signer.verify(raw, service.now.Now())
 	if err != nil {
 		return joinClaims{}, err
 	}

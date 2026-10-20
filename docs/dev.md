@@ -172,10 +172,10 @@ scripts/soak-broadcast.sh /tmp/fixture.mp4               # 默认 600 秒
 `SRS_CANDIDATE=<Mac LAN IP>`。Meeting 的 WHIP/WHEP 地址保持相对路径，由 Caddy 同源反代；设备访问
 `https://<Mac LAN IP>:8443`。
 
-## Meeting（M2 / T5–T7）
+## Meeting（M2 / T5–T8）
 
 T5 实现 Room 的控制面生命周期；T6 接入 WHIP 推流、WHEP 订阅、Track 上报和浏览器媒体 UI；
-T7 补上静音、摄像头开关、离开/重入和帧延迟测量。
+T7 补上静音、摄像头开关、离开/重入和帧延迟测量；T8 补上心跳、offline、空房关闭与踢人。
 
 ```bash
 # 创建 Meeting，得到 roomCode 与 host Join Token
@@ -220,6 +220,13 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PUT \
   -H 'content-type: application/json' \
   -H 'Authorization: Bearer <participantJoinToken>' \
   -d '{"participantId":"<participantId>","muted":true}'
+
+# 踢人（只能用 host 的 participant token）
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  localhost:8081/api/v1/rooms/<roomCode>/kick \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer <hostParticipantJoinToken>' \
+  -d '{"participantId":"<participantId>"}'
 ```
 
 - Join Token 是 HMAC-SHA256 签名的 `v1.<payload>.<signature>`，claims 包含 room、meeting、
@@ -232,11 +239,27 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PUT \
 - 带 participant token 和 `participantId` 的 join 会复用身份，并广播一次 `participant.joined`
   （用于改名或断线后重入）。
 - WebSocket：`ws://127.0.0.1:8081/api/v1/rooms/<roomCode>/ws?joinToken=<participantJoinToken>`，
-  服务端推送 `participant.joined` / `participant.left`。新订阅者连接后，服务端会先重放当前 Roster
-  里其他 Participant 的 `participant.joined`，补上 join 与订阅之间的事件。Vite 的 `/api` 代理已开启
-  `ws: true`。token 位于查询串，会出现在访问日志中；本地实验台允许任意 Origin，生产路由由 Caddy
-  同源接管。
-- 每个 Room 的 actor 与进程同生命周期；过期 Room 暂不做后台回收（T8 处理）。
+  服务端推送 `participant.joined` / `participant.left` / `participant.offline` /
+  `participant.online`。新订阅者连接后，服务端会先重放当前 Roster 里其他 Participant 的
+  `participant.joined`，再按需补 `participant.offline`，最后重放 mute 与 Track，补上 join 与订阅
+  之间的事件。Vite 的 `/api` 代理已开启 `ws: true`。token 位于查询串，会出现在访问日志中；本地
+  实验台允许任意 Origin，生产路由由 Caddy 同源接管。
+- 心跳由客户端在信令 socket 上发送 `{"type":"heartbeat"}`，每 5 秒一次（`MeetingPanel` 负责）；
+  服务端只认这一种上行消息。15 秒没有心跳就把 Participant 标记为 offline：`RosterEntry.online`
+  变为 `false`，广播 `participant.offline`，但保留 `participantId` 和 Track 状态。心跳恢复后广播
+  `participant.online`；断网或锁屏后用同一个 `participantId` + Join Token 重新 join 也能恢复。
+- 生命周期由 `RoomSession` 的一个 1 秒 ticker 推进：它把一次 sweep 依次投递给每个未关闭的 Room
+  actor。Roster 里没有任何 online Participant 时状态为 `closing`；`emptySince` 起 60 秒后变
+  `closed` 并关闭所有订阅者，期间任何心跳或 join 会把 Room 拉回 `open`。offline 的 Participant
+  保留 Roster 条目和 `participantId`，但不再把 Room 撑开。新建但无人加入的 Room 从创建时刻开始
+  计 60 秒。
+- 踢人：`POST /rooms/{code}/kick`，只有 host 的 participant token 可以调用。被踢者从 Roster 移除
+  （广播 `participant.left`），其信令 socket 以 close code 1008、reason `kicked` 关闭，`participantId`
+  进入 Room 的拒绝名单：后续 join、status、tracks、subscribe 都返回 403。Web 端收到 `kicked` 会
+  回到加入表单并提示，不提供 Rejoin。WHEP 本身没有控制面鉴权，被踢者若绕过控制面直接拉 SRS
+  仍可能拿到媒体；这属于尚未实现的 SRS `AccessPolicy` 覆盖范围。
+- `closed` 的 Room 保留一个 tombstone：实例留在内存里继续回答 status（`closed`），但 60 秒 ticker
+  会跳过它，不再做任何计时工作；Room Code 也不会复用。控制面重启会丢失所有 Room。
 
 ### 媒体（WHIP / WHEP）
 

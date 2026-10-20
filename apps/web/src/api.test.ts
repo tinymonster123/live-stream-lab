@@ -8,6 +8,7 @@ import {
   getRoom,
   type JoinGrant,
   joinRoom,
+  kickParticipant,
   leaveRoom,
   type MeetingCreated,
   type RoomStatus,
@@ -69,6 +70,7 @@ const room: RoomStatus = {
       participantId: "p1",
       displayName: "Alice",
       role: "host",
+      online: true,
       muted: false,
       tracks: [],
     },
@@ -174,6 +176,22 @@ describe("meeting api", () => {
         method: "POST",
         body: JSON.stringify({ participantId: "p1" }),
         headers: expect.objectContaining({ Authorization: "Bearer participant-token" }),
+      }),
+    );
+  });
+
+  it("kicks another Participant with the host token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(kickParticipant("ABC234", "p2", "host-token")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/rooms/ABC234/kick",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ participantId: "p2" }),
+        headers: expect.objectContaining({ Authorization: "Bearer host-token" }),
       }),
     );
   });

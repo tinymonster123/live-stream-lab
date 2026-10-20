@@ -200,6 +200,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/rooms/{roomCode}/kick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove a Participant from a Room
+         * @description Host only. The Participant is removed from the Roster, their WebSocket closes with the reason "kicked", and the Room refuses the same participantId on a later join. Subscribers release the removed Participant's WHEP session through participant.left.
+         */
+        post: operations["kickParticipant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recordings": {
         parameters: {
             query?: never;
@@ -362,6 +382,14 @@ export interface components {
         RoomLeaveRequest: {
             participantId: string;
         };
+        RoomKickRequest: {
+            participantId: string;
+        };
+        /**
+         * @description Reason carried in the WebSocket close frame when the Room disconnects a Participant. The server and the Web client must agree on these values.
+         * @enum {string}
+         */
+        RoomCloseReason: "kicked";
         RoomTrackUpdate: {
             participantId: string;
             /** @description The complete set of Tracks this Participant currently publishes. An empty array unpublishes everything. */
@@ -388,6 +416,8 @@ export interface components {
             participantId: string;
             displayName: string;
             role: components["schemas"]["RosterEntryRole"];
+            /** @description False after 15 seconds without a heartbeat. The Participant keeps their participantId and may rejoin with the same Join Token. */
+            online: boolean;
             /** @description Whether the Participant's microphone is muted. A muted Participant still publishes the microphone Track and sends silence. */
             muted: boolean;
             tracks: components["schemas"]["TrackSummary"][];
@@ -438,7 +468,7 @@ export interface components {
             createdAt: string;
         };
         /** @description Server-to-client Room event envelope */
-        WsEvent: components["schemas"]["ParticipantJoinedEvent"] | components["schemas"]["ParticipantLeftEvent"] | components["schemas"]["TrackPublishedEvent"] | components["schemas"]["TrackUnpublishedEvent"] | components["schemas"]["MuteChangedEvent"] | components["schemas"]["RecordingStateChangedEvent"] | components["schemas"]["AiJobStateChangedEvent"];
+        WsEvent: components["schemas"]["ParticipantJoinedEvent"] | components["schemas"]["ParticipantLeftEvent"] | components["schemas"]["ParticipantOfflineEvent"] | components["schemas"]["ParticipantOnlineEvent"] | components["schemas"]["TrackPublishedEvent"] | components["schemas"]["TrackUnpublishedEvent"] | components["schemas"]["MuteChangedEvent"] | components["schemas"]["RecordingStateChangedEvent"] | components["schemas"]["AiJobStateChangedEvent"];
         ParticipantJoinedEvent: {
             /** @constant */
             type: "participant.joined";
@@ -449,6 +479,16 @@ export interface components {
         ParticipantLeftEvent: {
             /** @constant */
             type: "participant.left";
+            participantId: string;
+        };
+        ParticipantOfflineEvent: {
+            /** @constant */
+            type: "participant.offline";
+            participantId: string;
+        };
+        ParticipantOnlineEvent: {
+            /** @constant */
+            type: "participant.online";
             participantId: string;
         };
         TrackPublishedEvent: {
@@ -805,6 +845,33 @@ export interface operations {
                 };
                 content?: never;
             };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    kickParticipant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                roomCode: components["parameters"]["RoomCode"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomKickRequest"];
+            };
+        };
+        responses: {
+            /** @description Participant removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

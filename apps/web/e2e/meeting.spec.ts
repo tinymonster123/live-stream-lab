@@ -359,6 +359,30 @@ test("glass-to-glass frame latency stays under 500ms", async ({ browser }, testI
   }
 });
 
+test("the host kicks a Participant and their media disappears", async ({ browser }) => {
+  const pair = await joinMeeting(browser);
+  const { host, guest } = pair;
+  try {
+    await expectRemoteMediaPlaying(host.locator('[data-testid^="remote-video-"]').first());
+
+    const bob = host.getByTestId("roster-entry").filter({ hasText: "Bob" });
+    await expect(bob.getByTestId("roster-kick")).toBeVisible();
+    await bob.getByTestId("roster-kick").click();
+
+    // The Room removes the Participant and broadcasts participant.left, which
+    // also releases the host's WHEP subscription.
+    await expect(host.getByTestId("roster")).not.toContainText("Bob");
+    await expect(host.locator('[data-testid^="remote-video-"]')).toHaveCount(0);
+
+    // The kicked client is returned to the join form without a Rejoin offer.
+    await expect(guest.getByRole("button", { name: "Create Meeting" })).toBeVisible();
+    await expect(guest.getByTestId("rejoin")).toHaveCount(0);
+    await expect(guest.getByRole("alert")).toContainText("removed");
+  } finally {
+    await closePair(pair);
+  }
+});
+
 test("two contexts share the Roster over WebSocket", async ({ browser }) => {
   const pair = await joinMeeting(browser);
   const { host, guest, roomCode } = pair;

@@ -267,6 +267,30 @@
         }
       }
     },
+    "/api/v1/rooms/{roomCode}/kick": {
+      "post": {
+        "tags": ["meetings"],
+        "operationId": "kickParticipant",
+        "summary": "Remove a Participant from a Room",
+        "description": "Host only. The Participant is removed from the Roster, their WebSocket closes with the reason \"kicked\", and the Room refuses the same participantId on a later join. Subscribers release the removed Participant's WHEP session through participant.left.",
+        "security": [{ "joinToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RoomKickRequest" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Participant removed" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/api/v1/recordings": {
       "get": {
         "tags": ["recordings"],
@@ -571,6 +595,19 @@
           "participantId": { "type": "string" }
         }
       },
+      "RoomKickRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId"],
+        "properties": {
+          "participantId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "RoomCloseReason": {
+        "type": "string",
+        "description": "Reason carried in the WebSocket close frame when the Room disconnects a Participant. The server and the Web client must agree on these values.",
+        "enum": ["kicked"]
+      },
       "RoomTrackUpdate": {
         "type": "object",
         "additionalProperties": false,
@@ -622,11 +659,15 @@
       "RosterEntry": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["participantId", "displayName", "role", "muted", "tracks"],
+        "required": ["participantId", "displayName", "role", "online", "muted", "tracks"],
         "properties": {
           "participantId": { "type": "string" },
           "displayName": { "type": "string" },
           "role": { "$ref": "#/components/schemas/RosterEntryRole" },
+          "online": {
+            "type": "boolean",
+            "description": "False after 15 seconds without a heartbeat. The Participant keeps their participantId and may rejoin with the same Join Token."
+          },
           "muted": {
             "type": "boolean",
             "description": "Whether the Participant's microphone is muted. A muted Participant still publishes the microphone Track and sends silence."
@@ -735,6 +776,8 @@
         "oneOf": [
           { "$ref": "#/components/schemas/ParticipantJoinedEvent" },
           { "$ref": "#/components/schemas/ParticipantLeftEvent" },
+          { "$ref": "#/components/schemas/ParticipantOfflineEvent" },
+          { "$ref": "#/components/schemas/ParticipantOnlineEvent" },
           { "$ref": "#/components/schemas/TrackPublishedEvent" },
           { "$ref": "#/components/schemas/TrackUnpublishedEvent" },
           { "$ref": "#/components/schemas/MuteChangedEvent" },
@@ -759,6 +802,24 @@
         "required": ["type", "participantId"],
         "properties": {
           "type": { "const": "participant.left" },
+          "participantId": { "type": "string" }
+        }
+      },
+      "ParticipantOfflineEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "participantId"],
+        "properties": {
+          "type": { "const": "participant.offline" },
+          "participantId": { "type": "string" }
+        }
+      },
+      "ParticipantOnlineEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "participantId"],
+        "properties": {
+          "type": { "const": "participant.online" },
           "participantId": { "type": "string" }
         }
       },
@@ -827,7 +888,7 @@
     "queryParameters": {
       "joinToken": { "type": "string", "required": true }
     },
-    "description": "Room signaling channel. The client sends heartbeats and subscription changes; the server pushes WsEvent messages. SDP is exchanged through WHIP/WHEP, not here. An invalid or expired joinToken is rejected with HTTP 403 before the upgrade.",
+    "description": "Room signaling channel. The client sends {\"type\":\"heartbeat\"} every 5 seconds; the server pushes WsEvent messages. A Participant without a heartbeat for 15 seconds becomes offline. SDP is exchanged through WHIP/WHEP, not here. An invalid or expired joinToken is rejected with HTTP 403 before the upgrade; a kicked Participant's socket closes with reason \"kicked\".",
     "messageSchema": { "$ref": "#/components/schemas/WsEvent" }
   }
 }

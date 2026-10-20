@@ -8,6 +8,7 @@ export function applyRoomEvent(roster: RosterEntry[], event: WsEvent): RosterEnt
         participantId: event.participantId,
         displayName: event.displayName,
         role: event.role,
+        online: true,
         muted: false,
         tracks: [],
       };
@@ -27,6 +28,7 @@ export function applyRoomEvent(roster: RosterEntry[], event: WsEvent): RosterEnt
         ...current,
         displayName: event.displayName,
         role: event.role,
+        online: true,
         muted: current.muted,
         tracks: current.tracks,
       };
@@ -35,6 +37,16 @@ export function applyRoomEvent(roster: RosterEntry[], event: WsEvent): RosterEnt
 
     case "participant.left":
       return roster.filter((item) => item.participantId !== event.participantId);
+
+    case "participant.offline":
+      return roster.map((item) =>
+        item.participantId === event.participantId ? { ...item, online: false } : item,
+      );
+
+    case "participant.online":
+      return roster.map((item) =>
+        item.participantId === event.participantId ? { ...item, online: true } : item,
+      );
 
     case "track.published":
       return roster.map((item) => {

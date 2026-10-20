@@ -9,7 +9,9 @@ export type PlaybackDescriptor = components["schemas"]["PlaybackDescriptor"];
 export type Role = components["schemas"]["RosterEntry"]["role"];
 export type RoomStatus = components["schemas"]["RoomStatus"];
 export type RosterEntry = components["schemas"]["RosterEntry"];
+export type RoomCloseReason = components["schemas"]["RoomCloseReason"];
 export type RoomJoinRequest = components["schemas"]["RoomJoinRequest"];
+export type RoomKickRequest = components["schemas"]["RoomKickRequest"];
 export type RoomMuteUpdate = components["schemas"]["RoomMuteUpdate"];
 export type RoomTrack = components["schemas"]["RoomTrack"];
 export type SubscriptionTarget = components["schemas"]["SubscriptionTarget"];
@@ -122,6 +124,20 @@ export function leaveRoom(
   return request<void>(`/rooms/${encodeURIComponent(roomCode)}/leave`, {
     method: "POST",
     body: JSON.stringify({ participantId }),
+    headers: { Authorization: `Bearer ${joinToken}` },
+  });
+}
+
+/** Host only. The Room refuses the kicked participantId on a later join. */
+export function kickParticipant(
+  roomCode: string,
+  participantId: string,
+  joinToken: string,
+): Promise<void> {
+  const body: RoomKickRequest = { participantId };
+  return request<void>(`/rooms/${encodeURIComponent(roomCode)}/kick`, {
+    method: "POST",
+    body: JSON.stringify(body),
     headers: { Authorization: `Bearer ${joinToken}` },
   });
 }

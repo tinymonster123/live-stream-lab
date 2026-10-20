@@ -58,7 +58,7 @@ func joinRoom(t *testing.T, service *RoomSession, code, name, bearer string) Joi
 func TestCreateMeetingReturnsRoomCodeAndHostToken(t *testing.T) {
 	service := newTestRoomSession()
 	now := time.Unix(1_700_000_000, 0)
-	service.now = func() time.Time { return now }
+	service.now.Set(func() time.Time { return now })
 
 	meeting := createMeeting(t, service, "Alice")
 
@@ -100,7 +100,7 @@ func TestCreateMeetingRejectsEmptyHostName(t *testing.T) {
 func TestJoinIssuesParticipantTokenAndWhipURL(t *testing.T) {
 	service := newTestRoomSession()
 	now := time.Unix(1_700_000_000, 0)
-	service.now = func() time.Time { return now }
+	service.now.Set(func() time.Time { return now })
 	meeting := createMeeting(t, service, "Alice")
 
 	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
@@ -412,10 +412,10 @@ func TestRejoinResetsMute(t *testing.T) {
 func TestJoinRejectsExpiredHostToken(t *testing.T) {
 	service := newTestRoomSession()
 	now := time.Unix(1_700_000_000, 0)
-	service.now = func() time.Time { return now }
+	service.now.Set(func() time.Time { return now })
 	meeting := createMeeting(t, service, "Alice")
 
-	service.now = func() time.Time { return now.Add(2 * time.Hour) }
+	service.now.Set(func() time.Time { return now.Add(2 * time.Hour) })
 	_, err := service.Join(meeting.RoomCode, RoomJoinRequest{DisplayName: "Alice"}, meeting.JoinToken)
 	if !errors.Is(err, ErrExpiredJoinToken) {
 		t.Fatalf("err = %v, want ErrExpiredJoinToken", err)
@@ -515,15 +515,18 @@ func TestLeaveRequiresOwnToken(t *testing.T) {
 func TestRoomExpires(t *testing.T) {
 	service := newTestRoomSession()
 	now := time.Unix(1_700_000_000, 0)
-	service.now = func() time.Time { return now }
+	service.now.Set(func() time.Time { return now })
 	meeting := createMeeting(t, service, "Alice")
+	host := joinRoom(t, service, meeting.RoomCode, "Alice", meeting.JoinToken)
 
-	service.now = func() time.Time { return now.Add(2 * time.Hour) }
+	// Outlive the Join Token so status has to be read with a fresh one for the
+	// same Participant.
+	service.now.Set(func() time.Time { return now.Add(2 * time.Hour) })
 	token, err := service.signer.issue(joinClaims{
 		RoomCode:      meeting.RoomCode,
 		MeetingID:     meeting.MeetingId,
-		ParticipantID: "p1",
-		Role:          Guest,
+		ParticipantID: host.ParticipantId,
+		Role:          Host,
 		ExpiresAt:     now.Add(3 * time.Hour).Unix(),
 	})
 	if err != nil {

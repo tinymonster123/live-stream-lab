@@ -11,7 +11,17 @@ import (
 	"github.com/coder/websocket"
 )
 
-const socketWriteTimeout = 5 * time.Second
+const (
+	socketWriteTimeout = 5 * time.Second
+	socketReadLimit    = 1024
+	kickCloseReason    = string(Kicked)
+)
+
+// clientMessage is the only message a Participant sends over the signaling
+// socket. SDP and media never travel here.
+type clientMessage struct {
+	Type string `json:"type"`
+}
 
 func (service *RoomSession) handleCreateMeeting(writer http.ResponseWriter, request *http.Request) {
 	var body MeetingCreateRequest
@@ -116,9 +126,29 @@ func (service *RoomSession) handleRoomStatus(writer http.ResponseWriter, request
 	writeJSON(writer, http.StatusOK, status)
 }
 
+func (service *RoomSession) handleKickParticipant(writer http.ResponseWriter, request *http.Request) {
+	var body RoomKickRequest
+	if err := decodeJSON(request, &body); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	err := service.Kick(
+		request.PathValue("roomCode"),
+		body,
+		bearerToken(request),
+	)
+	if err != nil {
+		writeServiceError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func (service *RoomSession) handleRoomSocket(writer http.ResponseWriter, request *http.Request) {
 	roomCode := request.PathValue("roomCode")
-	subscriber, err := service.Subscribe(roomCode, request.URL.Query().Get("joinToken"))
+	joinToken := request.URL.Query().Get("joinToken")
+	subscriber, err := service.Subscribe(roomCode, joinToken)
 	if err != nil {
 		writeServiceError(writer, err)
 		return
@@ -133,14 +163,53 @@ func (service *RoomSession) handleRoomSocket(writer http.ResponseWriter, request
 		log.Printf("room %s: websocket accept: %v", roomCode, err)
 		return
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	ctx := conn.CloseRead(request.Context())
+	ctx, cancel := context.WithCancel(request.Context())
+	closeStatus := websocket.StatusNormalClosure
+	closeReason := ""
+	defer func() {
+		// Write the close frame before canceling the read context: canceling
+		// it closes the underlying connection and would race the frame.
+		_ = conn.Close(closeStatus, closeReason)
+		cancel()
+	}()
+
+	conn.SetReadLimit(socketReadLimit)
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+
+			var message clientMessage
+			if err := json.Unmarshal(data, &message); err != nil || message.Type != "heartbeat" {
+				continue
+			}
+			// The handshake already proved the token; Heartbeat verifies it
+			// again so presence follows the same authorization path as the
+			// other operations.
+			if err := service.Heartbeat(roomCode, subscriber.participantID, joinToken); err != nil {
+				log.Printf("room %s: heartbeat from %s: %v", roomCode, subscriber.participantID, err)
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-readDone:
+			return
 		case <-subscriber.done:
+			// The Room removed this Participant. A kick names itself so the
+			// client can tell it apart from a network drop.
+			if subscriber.closeReason == kickCloseReason {
+				closeStatus = websocket.StatusPolicyViolation
+				closeReason = kickCloseReason
+			}
 			return
 		case event, ok := <-subscriber.events:
 			if !ok {
