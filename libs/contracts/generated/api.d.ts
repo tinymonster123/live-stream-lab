@@ -160,6 +160,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/rooms/{roomCode}/tracks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace the Tracks a Participant is publishing
+         * @description The Participant reports the Tracks it currently publishes after WHIP succeeds. The Room updates the Roster and broadcasts track.published / track.unpublished to other Participants.
+         */
+        put: operations["updateRoomTracks"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recordings": {
         parameters: {
             query?: never;
@@ -309,9 +329,9 @@ export interface components {
             participantId: string;
             /** @description Participant Join Token for Room status, leave, and the WebSocket handshake */
             joinToken: string;
-            /** @description Placeholder WHIP endpoint for this Participant until the media adapter lands in T6 */
+            /** @description WHIP endpoint for this Participant's Stream, carrying app=live&stream=<participantId>. Relative URLs resolve against the app origin (Vite or Caddy proxy). */
             publishUrl: string;
-            /** @description Placeholder subscription list; empty until the media adapter lands in T6 */
+            /** @description WHEP targets for Tracks other Participants already publish. One target per published Track; several Tracks may share one Stream and WHEP URL. */
             subscriptions: components["schemas"]["SubscriptionTarget"][];
         };
         SubscriptionTarget: {
@@ -321,6 +341,16 @@ export interface components {
         };
         RoomLeaveRequest: {
             participantId: string;
+        };
+        RoomTrackUpdate: {
+            participantId: string;
+            /** @description The complete set of Tracks this Participant currently publishes. An empty array unpublishes everything. */
+            tracks: components["schemas"]["RoomTrack"][];
+        };
+        RoomTrack: {
+            trackId: string;
+            /** @enum {string} */
+            kind: "audio" | "video";
         };
         RoomStatus: {
             roomCode: string;
@@ -403,6 +433,8 @@ export interface components {
             trackId: string;
             /** @enum {string} */
             kind: "audio" | "video";
+            /** @description WHEP endpoint for the Participant's Stream. Tracks sharing a Stream share this URL. */
+            whepUrl: string;
         };
         TrackUnpublishedEvent: {
             /** @constant */
@@ -695,6 +727,33 @@ export interface operations {
                     "application/json": components["schemas"]["RoomStatus"];
                 };
             };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateRoomTracks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                roomCode: components["parameters"]["RoomCode"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomTrackUpdate"];
+            };
+        };
+        responses: {
+            /** @description Tracks updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

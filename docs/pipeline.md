@@ -56,7 +56,7 @@
 6. AI：Go → Redis Streams → Python worker（mlx-whisper）→ Transcript / Summary
 7. 回放：Recording Track 派生混流文件，交给 Web 播放器
 
-SRS 是 stream-based SFU；Roster、Subscription、Join Token 都由 Go 控制面拥有。`rtc_to_rtmp` 默认关闭，双向会议录制时打开；非 localhost 的 WHIP 必须 HTTPS。
+SRS 是 stream-based SFU；Roster、Subscription、Join Token 都由 Go 控制面拥有。`rtc_to_rtmp` 默认关闭，双向会议录制时打开；非 localhost 的 WHIP 必须 HTTPS。WHIP/WHEP 的 SDP 走同源 HTTP（Vite/Caddy 反代到 SRS 的 1985），媒体走 SRS 的 `candidate`；`rtc_server.tcp` 同时提供 WebRTC over TCP，用于 UDP 被阻断或 Docker Desktop 转发不可靠的网络。
 
 ## 覆盖边界
 

@@ -9,6 +9,7 @@ type room struct {
 	code      string
 	meetingID string
 	expiresAt time.Time
+	whepBase  string
 	commands  chan any
 
 	participants map[string]*participant
@@ -20,6 +21,7 @@ type participant struct {
 	id          string
 	displayName string
 	role        RosterEntryRole
+	tracks      []TrackSummary
 }
 
 type roomSubscriber struct {
@@ -39,6 +41,7 @@ type joinResult struct {
 	participantID string
 	displayName   string
 	role          RosterEntryRole
+	subscriptions []SubscriptionTarget
 	err           error
 }
 
@@ -60,6 +63,12 @@ type unsubscribeCommand struct {
 	subscriber *roomSubscriber
 }
 
+type tracksCommand struct {
+	participantID string
+	tracks        []TrackSummary
+	reply         chan error
+}
+
 func (room *room) run(now func() time.Time, newID func() string) {
 	for command := range room.commands {
 		switch command := command.(type) {
@@ -73,6 +82,8 @@ func (room *room) run(now func() time.Time, newID func() string) {
 			command.reply <- room.subscribe(command, now())
 		case unsubscribeCommand:
 			room.unsubscribe(command)
+		case tracksCommand:
+			command.reply <- room.updateTracks(command)
 		}
 	}
 }
@@ -86,10 +97,15 @@ func (room *room) join(command joinCommand, now time.Time, newID func() string) 
 		if existing, ok := room.participants[command.rejoinID]; ok {
 			existing.displayName = command.displayName
 			room.broadcast(joinedEvent(existing), "")
+			// A rejoin starts a new media session, so Tracks from the dropped
+			// session no longer describe anything. Subscribers must release
+			// their WHEP connections until the Participant publishes again.
+			room.clearTracks(existing)
 			return joinResult{
 				participantID: existing.id,
 				displayName:   existing.displayName,
 				role:          existing.role,
+				subscriptions: room.subscriptionsFor(existing.id),
 			}
 		}
 	}
@@ -115,6 +131,7 @@ func (room *room) join(command joinCommand, now time.Time, newID func() string) 
 		participantID: participant.id,
 		displayName:   participant.displayName,
 		role:          participant.role,
+		subscriptions: room.subscriptionsFor(participant.id),
 	}
 }
 
@@ -149,11 +166,13 @@ func (room *room) status(now time.Time) RoomStatus {
 		if !ok {
 			continue
 		}
+		tracks := make([]TrackSummary, len(participant.tracks))
+		copy(tracks, participant.tracks)
 		participants = append(participants, RosterEntry{
 			ParticipantId: participant.id,
 			DisplayName:   participant.displayName,
 			Role:          participant.role,
-			Tracks:        []TrackSummary{},
+			Tracks:        tracks,
 		})
 	}
 
@@ -191,6 +210,17 @@ func (room *room) subscribe(command subscribeCommand, now time.Time) error {
 		case command.subscriber.events <- joinedEvent(participant):
 		default:
 			log.Printf("room %s: dropping roster snapshot for %s", room.code, command.subscriber.participantID)
+			continue
+		}
+
+		// Track state arrived after the Participant joined, so replay it next;
+		// otherwise a subscriber connecting now would miss every WHEP target.
+		for _, track := range participant.tracks {
+			select {
+			case command.subscriber.events <- room.publishedEvent(participant.id, track):
+			default:
+				log.Printf("room %s: dropping track snapshot for %s", room.code, command.subscriber.participantID)
+			}
 		}
 	}
 	return nil
@@ -200,6 +230,88 @@ func (room *room) unsubscribe(command unsubscribeCommand) {
 	if room.subscribers[command.subscriber.participantID] == command.subscriber {
 		delete(room.subscribers, command.subscriber.participantID)
 	}
+}
+
+func (room *room) updateTracks(command tracksCommand) error {
+	participant, ok := room.participants[command.participantID]
+	if !ok {
+		return ErrForbidden
+	}
+
+	previous := make(map[string]TrackSummary, len(participant.tracks))
+	for _, track := range participant.tracks {
+		previous[track.TrackId] = track
+	}
+
+	next := make(map[string]TrackSummary, len(command.tracks))
+	for _, track := range command.tracks {
+		next[track.TrackId] = track
+		if old, ok := previous[track.TrackId]; !ok || old.Kind != track.Kind {
+			room.broadcast(room.publishedEvent(participant.id, track), participant.id)
+		}
+	}
+	for _, track := range participant.tracks {
+		if _, ok := next[track.TrackId]; !ok {
+			room.unpublish(participant.id, track)
+		}
+	}
+
+	participant.tracks = command.tracks
+	return nil
+}
+
+func (room *room) clearTracks(participant *participant) {
+	for _, track := range participant.tracks {
+		room.unpublish(participant.id, track)
+	}
+	participant.tracks = nil
+}
+
+func (room *room) unpublish(participantID string, track TrackSummary) {
+	room.broadcast(TrackUnpublishedEvent{
+		Type:          "track.unpublished",
+		ParticipantId: participantID,
+		TrackId:       track.TrackId,
+	}, participantID)
+}
+
+// subscriptionsFor lists one WHEP target per published Track of every other
+// Participant. Tracks from the same Participant share a Stream and WHEP URL,
+// so callers deduplicate by Participant before opening peer connections.
+func (room *room) subscriptionsFor(participantID string) []SubscriptionTarget {
+	subscriptions := []SubscriptionTarget{}
+	for _, id := range room.order {
+		if id == participantID {
+			continue
+		}
+		participant, ok := room.participants[id]
+		if !ok {
+			continue
+		}
+		whepURL := room.whepURL(participant.id)
+		for _, track := range participant.tracks {
+			subscriptions = append(subscriptions, SubscriptionTarget{
+				ParticipantId: participant.id,
+				TrackId:       track.TrackId,
+				WhepUrl:       whepURL,
+			})
+		}
+	}
+	return subscriptions
+}
+
+func (room *room) publishedEvent(participantID string, track TrackSummary) TrackPublishedEvent {
+	return TrackPublishedEvent{
+		Type:          "track.published",
+		ParticipantId: participantID,
+		TrackId:       track.TrackId,
+		Kind:          TrackPublishedEventKind(track.Kind),
+		WhepUrl:       room.whepURL(participantID),
+	}
+}
+
+func (room *room) whepURL(participantID string) string {
+	return streamURL(room.whepBase, participantID)
 }
 
 func (room *room) broadcast(event any, exceptParticipant string) {

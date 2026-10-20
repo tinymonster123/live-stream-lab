@@ -256,6 +256,47 @@ func TestMeetingLifecycleEndpoints(t *testing.T) {
 	}
 }
 
+func TestUpdateRoomTracksEndpoint(t *testing.T) {
+	mux := newTestMux()
+	meeting := decodeJSONBody[MeetingCreated](t, performRequest(
+		t, mux, http.MethodPost, "/api/v1/meetings", `{"hostDisplayName":"Alice"}`,
+	))
+	path := "/api/v1/rooms/" + meeting.RoomCode
+	host := decodeJSONBody[JoinGrant](t, performAuthorizedRequest(
+		t, mux, http.MethodPost, path+"/join", `{"displayName":"Alice"}`, meeting.JoinToken,
+	))
+
+	body := `{"participantId":"` + host.ParticipantId +
+		`","tracks":[{"trackId":"camera","kind":"video"},{"trackId":"microphone","kind":"audio"}]}`
+	updated := performAuthorizedRequest(t, mux, http.MethodPut, path+"/tracks", body, host.JoinToken)
+	if updated.Code != http.StatusNoContent {
+		t.Fatalf("update tracks = %d, want 204 (body %s)", updated.Code, updated.Body.String())
+	}
+
+	statusResponse := performAuthorizedRequest(t, mux, http.MethodGet, path, "", host.JoinToken)
+	status := decodeJSONBody[RoomStatus](t, statusResponse)
+	if len(status.Participants) != 1 || len(status.Participants[0].Tracks) != 2 {
+		t.Fatalf("status = %+v, want two tracks", status.Participants)
+	}
+
+	missingToken := performRequest(t, mux, http.MethodPut, path+"/tracks", body)
+	if missingToken.Code != http.StatusForbidden {
+		t.Fatalf("update without token = %d, want 403", missingToken.Code)
+	}
+
+	invalid := performAuthorizedRequest(t, mux, http.MethodPut, path+"/tracks",
+		`{"participantId":"`+host.ParticipantId+`","tracks":[{"trackId":"","kind":"video"}]}`,
+		host.JoinToken)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid tracks = %d, want 400 (body %s)", invalid.Code, invalid.Body.String())
+	}
+
+	unknown := performRequest(t, mux, http.MethodPut, "/api/v1/rooms/ZZZZZZ/tracks", body)
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown room = %d, want 404", unknown.Code)
+	}
+}
+
 func TestRoomEndpointsRequireAValidJoinToken(t *testing.T) {
 	mux := newTestMux()
 	meeting := decodeJSONBody[MeetingCreated](t, performRequest(

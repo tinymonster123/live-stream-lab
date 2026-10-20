@@ -27,8 +27,38 @@ export function applyRoomEvent(roster: RosterEntry[], event: WsEvent): RosterEnt
     case "participant.left":
       return roster.filter((item) => item.participantId !== event.participantId);
 
+    case "track.published":
+      return roster.map((item) => {
+        if (item.participantId !== event.participantId) {
+          return item;
+        }
+
+        const track = {
+          trackId: event.trackId,
+          kind: event.kind,
+          published: true,
+        };
+        const replaced = item.tracks.some((current) => current.trackId === event.trackId);
+        const tracks = replaced
+          ? item.tracks.map((current) =>
+              current.trackId === event.trackId ? { ...current, ...track } : current,
+            )
+          : [...item.tracks, track];
+        return { ...item, tracks };
+      });
+
+    case "track.unpublished":
+      return roster.map((item) =>
+        item.participantId === event.participantId
+          ? {
+              ...item,
+              tracks: item.tracks.filter((track) => track.trackId !== event.trackId),
+            }
+          : item,
+      );
+
     default:
-      // T5 only consumes Roster events; track/recording events arrive later.
+      // Recording and AI events are not part of the Roster.
       return roster;
   }
 }

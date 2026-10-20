@@ -1,8 +1,51 @@
 {
 	admin 0.0.0.0:2019
+	# Port 80 is a hint page, not a redirect. The HTTPS entry point is published
+	# on 8443, so a redirect to the default 443 would point at the wrong port.
+	auto_https disable_redirects
+	# Browsers and curl do not send SNI for an IP address. Use the site address
+	# as the default so TLS still selects the internal certificate.
+	default_sni {$SITE_ADDRESS:localhost}
 }
 
-# T1 placeholder. HTTPS with an internal CA and SRS/control-plane routing land with M2.
+# HTTPS entry point for a LAN device. Set SITE_ADDRESS to the Mac's LAN IP (or a
+# hostname that resolves on the device) before `pnpm infra:up`:
+#
+#   SITE_ADDRESS=192.168.1.20 pnpm infra:up
+#
+# Caddy's internal CA signs the certificate. Copy and trust
+# /data/caddy/pki/authorities/local/root.crt on the device; see docs/dev.md.
+# The container listens on 443, published as https://<host>:8443.
+{$SITE_ADDRESS:localhost} {
+	tls internal
+
+	# Liveness for the HTTPS listener, without depending on the native apps.
+	handle /caddy-healthz {
+		respond "ok" 200
+	}
+
+	# WHIP/WHEP signaling. SDP and the SRS HTTP API share this path prefix, and
+	# keeping it same-origin avoids CORS and the Location header exposure it needs.
+	handle /rtc/* {
+		reverse_proxy srs:1985
+	}
+
+	handle /api/* {
+		reverse_proxy host.docker.internal:8081
+	}
+
+	handle /healthz {
+		reverse_proxy host.docker.internal:8081
+	}
+
+	# Everything else is the Vite app. Media (UDP) does not pass through Caddy;
+	# SRS advertises SRS_CANDIDATE and the browser connects to it directly.
+	handle {
+		reverse_proxy host.docker.internal:5173
+	}
+}
+
+# Plain HTTP stays up for health checks and tells a LAN device to use HTTPS.
 :80 {
-	respond "live-stream-lab caddy ok" 200
+	respond "live-stream-lab: use https://<host>:8443" 200
 }

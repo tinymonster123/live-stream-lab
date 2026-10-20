@@ -47,6 +47,25 @@ func (service *RoomSession) handleJoinRoom(writer http.ResponseWriter, request *
 	writeJSON(writer, http.StatusOK, grant)
 }
 
+func (service *RoomSession) handleUpdateRoomTracks(writer http.ResponseWriter, request *http.Request) {
+	var body RoomTrackUpdate
+	if err := decodeJSON(request, &body); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	err := service.UpdateTracks(
+		request.PathValue("roomCode"),
+		body,
+		bearerToken(request),
+	)
+	if err != nil {
+		writeServiceError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func (service *RoomSession) handleLeaveRoom(writer http.ResponseWriter, request *http.Request) {
 	var body RoomLeaveRequest
 	if err := decodeJSON(request, &body); err != nil {

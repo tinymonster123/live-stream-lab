@@ -51,11 +51,13 @@ Participant A ──WHIP──► SRS SFU ──WHEP──► Participant B
 ```
 
 - M1 用 `StreamSession`；M2+ 增加 `RoomSession`。
-- T5 已实现 `RoomSession`、Room Actor、Roster、Join Token 和 WebSocket 的
-  `participant.joined` / `participant.left`；媒体仍是占位，WHIP/WHEP 与订阅列表在 T6。
+- T5 实现 `RoomSession`、Room Actor、Roster、Join Token 和 WebSocket；T6 接入 WHIP/WHEP：
+  Participant 用 WHIP 推一路包含摄像头与麦克风的 Stream，控制面按已发布的 Track 生成 WHEP 订阅列表，
+  Track 变化通过 `track.published` / `track.unpublished` 广播。
 - `RoomSession`：Room 的控制面生命周期；拥有 Participant、Subscription、录制编排。
-- `Room Actor`：每个 Room 一个 goroutine，串行处理 join/leave/mute/subscribe。
-- `Signaling`：WebSocket 房间事件 + WHIP/WHEP 订阅列表；不自己交换 SDP。
+- `Room Actor`：每个 Room 一个 goroutine，串行处理 join/leave/tracks/mute/subscribe。
+- `Signaling`：WebSocket 房间事件 + WHIP/WHEP 订阅列表；不自己交换 SDP。客户端报告 WHIP 成功后通过
+  `PUT /rooms/{code}/tracks` 更新 Track 集合。
 - `MeetingRecorder`：每个 Participant 一路 FFmpeg，产出 Recording Track + 时间线。
 - `AIJobQueue`：Redis Streams 生产/消费；消息是 `AI Job`。
 - `ArtifactStore`：Transcript / Summary 的文件与元数据。
@@ -65,6 +67,7 @@ Participant A ──WHIP──► SRS SFU ──WHEP──► Participant B
 interface RoomSession {
   create(spec: RoomSpec): Promise<RoomHandle>;
   join(roomId: string, principal: Principal): Promise<JoinGrant>;
+  updateTracks(roomId: string, participantId: string, tracks: RoomTrack[]): Promise<void>;
   leave(roomId: string, participantId: string): Promise<void>;
   status(roomId: string): RoomStatus;
 }
@@ -72,12 +75,12 @@ interface RoomSession {
 type JoinGrant = {
   participantId: string;
   joinToken: string;
-  publishUrl: string;      // WHIP
-  subscribe: string[];     // WHEP stream list
+  publishUrl: string;             // WHIP endpoint for this Participant's Stream
+  subscriptions: SubscriptionTarget[]; // WHEP targets for Tracks already published
 };
 ```
 
-调用方只表达“创建/加入/离开/查询”，WHIP/WHEP、SRS stream 命名、订阅扇出都藏在实现里。
+调用方只表达“创建/加入/上报 Track/离开/查询”，WHIP/WHEP、SRS stream 命名、订阅扇出都藏在实现里。
 
 ## 深模块
 
@@ -192,7 +195,7 @@ interface Telemetry {
 |---|---|
 | `StreamSession` | 开播逻辑散落在 UI/脚本/API，状态不一致，失败无法回收 |
 | `RoomSession` + `Room Actor` | 房间状态、订阅扇出、断线重连没有归属；T5 已实现 Roster 与 join/leave，断线重连在 T8 |
-| `Signaling` | 客户端不知道发布/订阅哪些 Stream；T5 已实现 Roster 事件，订阅列表在 T6 |
+| `Signaling` | 客户端不知道发布/订阅哪些 Stream；T5 已实现 Roster 事件，T6 已实现 Track 上报与 WHEP 订阅列表 |
 | `MeetingRecorder` | 无法按 Participant 落盘，AI 没有输入 |
 | `AIJobQueue` + `ArtifactStore` | AI 与录制链路断开，产物不可查 |
 | `CaptureSource` | 换设备要改命令行；权限问题运行时才爆 |

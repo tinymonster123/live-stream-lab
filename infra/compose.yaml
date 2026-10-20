@@ -12,7 +12,8 @@ services:
       - "1935:1935" # RTMP ingest
       - "1985:1985" # HTTP API
       - "8080:8080" # HTTP-FLV / HLS
-      - "8000:8000/udp" # WebRTC
+      - "8000:8000/udp" # WebRTC over UDP
+      - "8000:8000/tcp" # WebRTC over TCP (Docker Desktop macOS UDP workaround)
     volumes:
       - ./srs/srs.conf:/usr/local/srs/conf/srs.conf:ro
     healthcheck:
@@ -44,9 +45,19 @@ services:
     image: ${CADDY_IMAGE:-docker.m.daocloud.io/library/caddy:2-alpine}
     container_name: lsl-caddy
     restart: unless-stopped
+    environment:
+      # The Caddyfile reads this to pick the HTTPS site address. Set it to the
+      # Mac's LAN IP when a phone or another device needs to join.
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
     ports:
       - "127.0.0.1:2019:2019" # admin API, host-only
-      - "8088:80" # HTTP entry point
+      - "8088:80" # HTTP health check / HTTPS hint
+      - "8443:443" # HTTPS entry point (internal CA)
+    extra_hosts:
+      # Caddy in a Linux container needs this to reach the native Vite and Go
+      # processes. Docker Desktop provides the name already; host-gateway is a
+      # no-op there and required on Linux.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

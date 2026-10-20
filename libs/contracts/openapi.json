@@ -220,6 +220,30 @@
         }
       }
     },
+    "/api/v1/rooms/{roomCode}/tracks": {
+      "put": {
+        "tags": ["meetings"],
+        "operationId": "updateRoomTracks",
+        "summary": "Replace the Tracks a Participant is publishing",
+        "description": "The Participant reports the Tracks it currently publishes after WHIP succeeds. The Room updates the Roster and broadcasts track.published / track.unpublished to other Participants.",
+        "security": [{ "joinToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/RoomCode" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RoomTrackUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Tracks updated" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/api/v1/recordings": {
       "get": {
         "tags": ["recordings"],
@@ -298,7 +322,7 @@
       "joinToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "HMAC-signed Join Token issued for one Participant and Room. Required for Room status, leave, and the WebSocket handshake; optional on join when using the Meeting's host token."
+        "description": "HMAC-signed Join Token issued for one Participant and Room. Required for Room status, Track updates, leave, and the WebSocket handshake; optional on join when using the Meeting's host token."
       }
     },
     "parameters": {
@@ -497,11 +521,11 @@
           },
           "publishUrl": {
             "type": "string",
-            "description": "Placeholder WHIP endpoint for this Participant until the media adapter lands in T6"
+            "description": "WHIP endpoint for this Participant's Stream, carrying app=live&stream=<participantId>. Relative URLs resolve against the app origin (Vite or Caddy proxy)."
           },
           "subscriptions": {
             "type": "array",
-            "description": "Placeholder subscription list; empty until the media adapter lands in T6",
+            "description": "WHEP targets for Tracks other Participants already publish. One target per published Track; several Tracks may share one Stream and WHEP URL.",
             "items": { "$ref": "#/components/schemas/SubscriptionTarget" }
           }
         }
@@ -522,6 +546,28 @@
         "required": ["participantId"],
         "properties": {
           "participantId": { "type": "string" }
+        }
+      },
+      "RoomTrackUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["participantId", "tracks"],
+        "properties": {
+          "participantId": { "type": "string" },
+          "tracks": {
+            "type": "array",
+            "description": "The complete set of Tracks this Participant currently publishes. An empty array unpublishes everything.",
+            "items": { "$ref": "#/components/schemas/RoomTrack" }
+          }
+        }
+      },
+      "RoomTrack": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trackId", "kind"],
+        "properties": {
+          "trackId": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["audio", "video"] }
         }
       },
       "RoomStatus": {
@@ -684,12 +730,16 @@
       "TrackPublishedEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "participantId", "trackId", "kind"],
+        "required": ["type", "participantId", "trackId", "kind", "whepUrl"],
         "properties": {
           "type": { "const": "track.published" },
           "participantId": { "type": "string" },
           "trackId": { "type": "string" },
-          "kind": { "type": "string", "enum": ["audio", "video"] }
+          "kind": { "type": "string", "enum": ["audio", "video"] },
+          "whepUrl": {
+            "type": "string",
+            "description": "WHEP endpoint for the Participant's Stream. Tracks sharing a Stream share this URL."
+          }
         }
       },
       "TrackUnpublishedEvent": {

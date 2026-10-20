@@ -14,7 +14,8 @@ const (
 	roomCodeLength    = 6
 	roomCodeAlphabet  = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	defaultRoomTTL    = 2 * time.Hour
-	defaultWhipBase   = "http://127.0.0.1:8080/rtc/v1/whip/"
+	defaultWhipBase   = "/rtc/v1/whip/"
+	defaultWhepBase   = "/rtc/v1/whep/"
 	roomCommandBuffer = 64
 	subscriberBuffer  = 32
 )
@@ -29,6 +30,7 @@ var (
 type RoomConfig struct {
 	JoinSecret []byte
 	WhipBase   string
+	WhepBase   string
 	TTL        time.Duration
 }
 
@@ -39,6 +41,7 @@ type RoomSession struct {
 	rooms    map[string]*room
 	signer   tokenSigner
 	whipBase string
+	whepBase string
 	ttl      time.Duration
 	now      func() time.Time
 	newID    func() string
@@ -59,11 +62,15 @@ func NewRoomSession(config RoomConfig) (*RoomSession, error) {
 	if config.WhipBase == "" {
 		config.WhipBase = defaultWhipBase
 	}
+	if config.WhepBase == "" {
+		config.WhepBase = defaultWhepBase
+	}
 
 	return &RoomSession{
 		rooms:    make(map[string]*room),
 		signer:   tokenSigner{secret: secret},
 		whipBase: config.WhipBase,
+		whepBase: config.WhepBase,
 		ttl:      config.TTL,
 		now:      time.Now,
 		newID:    randomID,
@@ -101,6 +108,7 @@ func (service *RoomSession) Create(request MeetingCreateRequest) (MeetingCreated
 		code:         code,
 		meetingID:    meetingID,
 		expiresAt:    expiresAt,
+		whepBase:     service.whepBase,
 		commands:     make(chan any, roomCommandBuffer),
 		participants: make(map[string]*participant),
 		subscribers:  make(map[string]*roomSubscriber),
@@ -181,8 +189,68 @@ func (service *RoomSession) Join(
 		ParticipantId: result.participantID,
 		JoinToken:     participantToken,
 		PublishUrl:    service.publishURL(result.participantID),
-		Subscriptions: []SubscriptionTarget{},
+		Subscriptions: result.subscriptions,
 	}, nil
+}
+
+// UpdateTracks replaces the set of Tracks a Participant reports publishing.
+// The Room broadcasts the difference so other Participants can subscribe or
+// release a WHEP session.
+func (service *RoomSession) UpdateTracks(
+	roomCode string,
+	request RoomTrackUpdate,
+	bearer string,
+) error {
+	target, err := service.room(roomCode)
+	if err != nil {
+		return err
+	}
+
+	claims, err := service.verifyParticipantToken(bearer, roomCode)
+	if err != nil {
+		return err
+	}
+	if claims.ParticipantID != request.ParticipantId {
+		return ErrForbidden
+	}
+
+	tracks, err := normalizeTracks(request.Tracks)
+	if err != nil {
+		return err
+	}
+
+	reply := make(chan error, 1)
+	target.commands <- tracksCommand{
+		participantID: request.ParticipantId,
+		tracks:        tracks,
+		reply:         reply,
+	}
+	return <-reply
+}
+
+// normalizeTracks validates the reported set and converts it to the Roster's
+// summary shape. Every reported Track is published by definition: to stop
+// publishing one, the caller reports the set without it.
+func normalizeTracks(tracks []RoomTrack) ([]TrackSummary, error) {
+	normalized := make([]TrackSummary, 0, len(tracks))
+	seen := make(map[string]struct{}, len(tracks))
+	for _, track := range tracks {
+		if strings.TrimSpace(track.TrackId) == "" || !track.Kind.Valid() {
+			return nil, ErrInvalidRoomRequest
+		}
+		if _, duplicate := seen[track.TrackId]; duplicate {
+			return nil, ErrInvalidRoomRequest
+		}
+		seen[track.TrackId] = struct{}{}
+
+		published := true
+		normalized = append(normalized, TrackSummary{
+			TrackId:   track.TrackId,
+			Kind:      TrackSummaryKind(track.Kind),
+			Published: &published,
+		})
+	}
+	return normalized, nil
 }
 
 func (service *RoomSession) Leave(roomCode, participantID, bearer string) error {
@@ -295,9 +363,16 @@ func (service *RoomSession) verifyParticipantToken(raw, roomCode string) (joinCl
 }
 
 func (service *RoomSession) publishURL(participantID string) string {
-	parsed, err := url.Parse(service.whipBase)
+	return streamURL(service.whipBase, participantID)
+}
+
+// streamURL appends the app/stream query SRS uses to address one Stream. The
+// base may be relative: the browser resolves it against the app origin, and
+// Vite or Caddy proxies /rtc to SRS.
+func streamURL(base, participantID string) string {
+	parsed, err := url.Parse(base)
 	if err != nil {
-		return service.whipBase
+		return base
 	}
 
 	query := parsed.Query()
