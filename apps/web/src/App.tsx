@@ -1,4 +1,5 @@
 import { BroadcastPanel } from "./BroadcastPanel";
+import { MeetingPanel } from "./MeetingPanel";
 
 export function App() {
   return (
@@ -11,6 +12,7 @@ export function App() {
         </p>
       </section>
       <BroadcastPanel />
+      <MeetingPanel />
       <p>
         Control plane: <strong data-testid="control-plane-status">not connected</strong>
       </p>

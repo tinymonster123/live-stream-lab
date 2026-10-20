@@ -7,22 +7,26 @@ import (
 )
 
 type appConfig struct {
-	Addr       string
-	RTMPBase   string
-	FLVBase    string
-	HLSBase    string
-	SRSAPIBase string
-	FFmpegBin  string
+	Addr            string
+	RTMPBase        string
+	FLVBase         string
+	HLSBase         string
+	WhipBase        string
+	SRSAPIBase      string
+	FFmpegBin       string
+	JoinTokenSecret string
 }
 
 func configFromEnv() appConfig {
 	return appConfig{
-		Addr:       envOrDefault("CONTROL_PLANE_ADDR", ":8081"),
-		RTMPBase:   envOrDefault("SRS_RTMP_BASE", "rtmp://127.0.0.1:1935/live"),
-		FLVBase:    envOrDefault("SRS_FLV_BASE", "http://127.0.0.1:8080/live"),
-		HLSBase:    envOrDefault("SRS_HLS_BASE", "http://127.0.0.1:8080/live"),
-		SRSAPIBase: envAllowEmpty("SRS_API_BASE", "http://127.0.0.1:1985"),
-		FFmpegBin:  envOrDefault("FFMPEG_BIN", "ffmpeg"),
+		Addr:            envOrDefault("CONTROL_PLANE_ADDR", ":8081"),
+		RTMPBase:        envOrDefault("SRS_RTMP_BASE", "rtmp://127.0.0.1:1935/live"),
+		FLVBase:         envOrDefault("SRS_FLV_BASE", "http://127.0.0.1:8080/live"),
+		HLSBase:         envOrDefault("SRS_HLS_BASE", "http://127.0.0.1:8080/live"),
+		WhipBase:        envOrDefault("SRS_WHIP_BASE", defaultWhipBase),
+		SRSAPIBase:      envAllowEmpty("SRS_API_BASE", "http://127.0.0.1:1985"),
+		FFmpegBin:       envOrDefault("FFMPEG_BIN", "ffmpeg"),
+		JoinTokenSecret: os.Getenv("JOIN_TOKEN_SECRET"),
 	}
 }
 
@@ -59,7 +63,15 @@ func main() {
 		},
 	)
 
-	server := &http.Server{Addr: config.Addr, Handler: newMux(service)}
+	rooms, err := NewRoomSession(RoomConfig{
+		JoinSecret: []byte(config.JoinTokenSecret),
+		WhipBase:   config.WhipBase,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	server := &http.Server{Addr: config.Addr, Handler: newMux(service, rooms)}
 
 	log.Printf("control-plane listening on %s", config.Addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

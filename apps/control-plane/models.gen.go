@@ -4,8 +4,35 @@
 package main
 
 import (
+	"encoding/json"
 	"time"
+
+	"github.com/oapi-codegen/runtime"
 )
+
+// Defines values for AiJobStateChangedEventState.
+const (
+	AiJobStateChangedEventStateFailed    AiJobStateChangedEventState = "failed"
+	AiJobStateChangedEventStateQueued    AiJobStateChangedEventState = "queued"
+	AiJobStateChangedEventStateRunning   AiJobStateChangedEventState = "running"
+	AiJobStateChangedEventStateSucceeded AiJobStateChangedEventState = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the AiJobStateChangedEventState enum.
+func (e AiJobStateChangedEventState) Valid() bool {
+	switch e {
+	case AiJobStateChangedEventStateFailed:
+		return true
+	case AiJobStateChangedEventStateQueued:
+		return true
+	case AiJobStateChangedEventStateRunning:
+		return true
+	case AiJobStateChangedEventStateSucceeded:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for ArtifactSummaryKind.
 const (
@@ -169,6 +196,30 @@ func (e RecordingState) Valid() bool {
 	}
 }
 
+// Defines values for RecordingStateChangedEventState.
+const (
+	RecordingStateChangedEventStateFailed     RecordingStateChangedEventState = "failed"
+	RecordingStateChangedEventStateFinalizing RecordingStateChangedEventState = "finalizing"
+	RecordingStateChangedEventStateReady      RecordingStateChangedEventState = "ready"
+	RecordingStateChangedEventStateRecording  RecordingStateChangedEventState = "recording"
+)
+
+// Valid indicates whether the value is a known member of the RecordingStateChangedEventState enum.
+func (e RecordingStateChangedEventState) Valid() bool {
+	switch e {
+	case RecordingStateChangedEventStateFailed:
+		return true
+	case RecordingStateChangedEventStateFinalizing:
+		return true
+	case RecordingStateChangedEventStateReady:
+		return true
+	case RecordingStateChangedEventStateRecording:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RoomEventType.
 const (
 	MuteChanged       RoomEventType = "mute.changed"
@@ -235,23 +286,51 @@ func (e RosterEntryRole) Valid() bool {
 	}
 }
 
-// Defines values for TrackSummaryKind.
+// Defines values for TrackPublishedEventKind.
 const (
-	Audio TrackSummaryKind = "audio"
-	Video TrackSummaryKind = "video"
+	TrackPublishedEventKindAudio TrackPublishedEventKind = "audio"
+	TrackPublishedEventKindVideo TrackPublishedEventKind = "video"
 )
 
-// Valid indicates whether the value is a known member of the TrackSummaryKind enum.
-func (e TrackSummaryKind) Valid() bool {
+// Valid indicates whether the value is a known member of the TrackPublishedEventKind enum.
+func (e TrackPublishedEventKind) Valid() bool {
 	switch e {
-	case Audio:
+	case TrackPublishedEventKindAudio:
 		return true
-	case Video:
+	case TrackPublishedEventKindVideo:
 		return true
 	default:
 		return false
 	}
 }
+
+// Defines values for TrackSummaryKind.
+const (
+	TrackSummaryKindAudio TrackSummaryKind = "audio"
+	TrackSummaryKindVideo TrackSummaryKind = "video"
+)
+
+// Valid indicates whether the value is a known member of the TrackSummaryKind enum.
+func (e TrackSummaryKind) Valid() bool {
+	switch e {
+	case TrackSummaryKindAudio:
+		return true
+	case TrackSummaryKindVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// AiJobStateChangedEvent defines model for AiJobStateChangedEvent.
+type AiJobStateChangedEvent struct {
+	JobId string                      `json:"jobId"`
+	State AiJobStateChangedEventState `json:"state"`
+	Type  interface{}                 `json:"type"`
+}
+
+// AiJobStateChangedEventState defines model for AiJobStateChangedEvent.State.
+type AiJobStateChangedEventState string
 
 // ArtifactList defines model for ArtifactList.
 type ArtifactList struct {
@@ -327,11 +406,14 @@ type HealthResponseStatus string
 
 // JoinGrant defines model for JoinGrant.
 type JoinGrant struct {
+	// JoinToken Participant Join Token for Room status, leave, and the WebSocket handshake
 	JoinToken     string `json:"joinToken"`
 	ParticipantId string `json:"participantId"`
 
-	// PublishUrl WHIP endpoint for this Participant
-	PublishUrl    string               `json:"publishUrl"`
+	// PublishUrl Placeholder WHIP endpoint for this Participant until the media adapter lands in T6
+	PublishUrl string `json:"publishUrl"`
+
+	// Subscriptions Placeholder subscription list; empty until the media adapter lands in T6
 	Subscriptions []SubscriptionTarget `json:"subscriptions"`
 }
 
@@ -346,9 +428,32 @@ type MeetingCreateRequest struct {
 // MeetingCreated defines model for MeetingCreated.
 type MeetingCreated struct {
 	ExpiresAt time.Time `json:"expiresAt"`
-	JoinToken string    `json:"joinToken"`
-	MeetingId string    `json:"meetingId"`
-	RoomCode  string    `json:"roomCode"`
+
+	// JoinToken Host Join Token; present it as a Bearer token when the host joins
+	JoinToken string `json:"joinToken"`
+	MeetingId string `json:"meetingId"`
+	RoomCode  string `json:"roomCode"`
+}
+
+// MuteChangedEvent defines model for MuteChangedEvent.
+type MuteChangedEvent struct {
+	Muted         bool        `json:"muted"`
+	ParticipantId string      `json:"participantId"`
+	Type          interface{} `json:"type"`
+}
+
+// ParticipantJoinedEvent defines model for ParticipantJoinedEvent.
+type ParticipantJoinedEvent struct {
+	DisplayName   string          `json:"displayName"`
+	ParticipantId string          `json:"participantId"`
+	Role          RosterEntryRole `json:"role"`
+	Type          interface{}     `json:"type"`
+}
+
+// ParticipantLeftEvent defines model for ParticipantLeftEvent.
+type ParticipantLeftEvent struct {
+	ParticipantId string      `json:"participantId"`
+	Type          interface{} `json:"type"`
 }
 
 // PlaybackDescriptor defines model for PlaybackDescriptor.
@@ -395,6 +500,16 @@ type RecordingState string
 type RecordingList struct {
 	Recordings []Recording `json:"recordings"`
 }
+
+// RecordingStateChangedEvent defines model for RecordingStateChangedEvent.
+type RecordingStateChangedEvent struct {
+	RecordingId string                          `json:"recordingId"`
+	State       RecordingStateChangedEventState `json:"state"`
+	Type        interface{}                     `json:"type"`
+}
+
+// RecordingStateChangedEventState defines model for RecordingStateChangedEvent.State.
+type RecordingStateChangedEventState string
 
 // RecordingTrack defines model for RecordingTrack.
 type RecordingTrack struct {
@@ -445,7 +560,7 @@ type RosterEntry struct {
 	Tracks        []TrackSummary  `json:"tracks"`
 }
 
-// RosterEntryRole defines model for RosterEntry.Role.
+// RosterEntryRole defines model for RosterEntryRole.
 type RosterEntryRole string
 
 // SubscriptionTarget defines model for SubscriptionTarget.
@@ -454,6 +569,17 @@ type SubscriptionTarget struct {
 	TrackId       string `json:"trackId"`
 	WhepUrl       string `json:"whepUrl"`
 }
+
+// TrackPublishedEvent defines model for TrackPublishedEvent.
+type TrackPublishedEvent struct {
+	Kind          TrackPublishedEventKind `json:"kind"`
+	ParticipantId string                  `json:"participantId"`
+	TrackId       string                  `json:"trackId"`
+	Type          interface{}             `json:"type"`
+}
+
+// TrackPublishedEventKind defines model for TrackPublishedEvent.Kind.
+type TrackPublishedEventKind string
 
 // TrackSummary defines model for TrackSummary.
 type TrackSummary struct {
@@ -464,6 +590,18 @@ type TrackSummary struct {
 
 // TrackSummaryKind defines model for TrackSummary.Kind.
 type TrackSummaryKind string
+
+// TrackUnpublishedEvent defines model for TrackUnpublishedEvent.
+type TrackUnpublishedEvent struct {
+	ParticipantId string      `json:"participantId"`
+	TrackId       string      `json:"trackId"`
+	Type          interface{} `json:"type"`
+}
+
+// WsEvent Server-to-client Room event envelope
+type WsEvent struct {
+	union json.RawMessage
+}
 
 // BroadcastId defines model for BroadcastId.
 type BroadcastId = string
@@ -497,3 +635,195 @@ type JoinRoomJSONRequestBody = RoomJoinRequest
 
 // LeaveRoomJSONRequestBody defines body for LeaveRoom for application/json ContentType.
 type LeaveRoomJSONRequestBody = RoomLeaveRequest
+
+// AsParticipantJoinedEvent returns the union data inside the WsEvent as a ParticipantJoinedEvent
+func (t WsEvent) AsParticipantJoinedEvent() (ParticipantJoinedEvent, error) {
+	var body ParticipantJoinedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromParticipantJoinedEvent overwrites any union data inside the WsEvent as the provided ParticipantJoinedEvent
+func (t *WsEvent) FromParticipantJoinedEvent(v ParticipantJoinedEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeParticipantJoinedEvent performs a merge with any union data inside the WsEvent, using the provided ParticipantJoinedEvent
+func (t *WsEvent) MergeParticipantJoinedEvent(v ParticipantJoinedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsParticipantLeftEvent returns the union data inside the WsEvent as a ParticipantLeftEvent
+func (t WsEvent) AsParticipantLeftEvent() (ParticipantLeftEvent, error) {
+	var body ParticipantLeftEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromParticipantLeftEvent overwrites any union data inside the WsEvent as the provided ParticipantLeftEvent
+func (t *WsEvent) FromParticipantLeftEvent(v ParticipantLeftEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeParticipantLeftEvent performs a merge with any union data inside the WsEvent, using the provided ParticipantLeftEvent
+func (t *WsEvent) MergeParticipantLeftEvent(v ParticipantLeftEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTrackPublishedEvent returns the union data inside the WsEvent as a TrackPublishedEvent
+func (t WsEvent) AsTrackPublishedEvent() (TrackPublishedEvent, error) {
+	var body TrackPublishedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTrackPublishedEvent overwrites any union data inside the WsEvent as the provided TrackPublishedEvent
+func (t *WsEvent) FromTrackPublishedEvent(v TrackPublishedEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTrackPublishedEvent performs a merge with any union data inside the WsEvent, using the provided TrackPublishedEvent
+func (t *WsEvent) MergeTrackPublishedEvent(v TrackPublishedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTrackUnpublishedEvent returns the union data inside the WsEvent as a TrackUnpublishedEvent
+func (t WsEvent) AsTrackUnpublishedEvent() (TrackUnpublishedEvent, error) {
+	var body TrackUnpublishedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTrackUnpublishedEvent overwrites any union data inside the WsEvent as the provided TrackUnpublishedEvent
+func (t *WsEvent) FromTrackUnpublishedEvent(v TrackUnpublishedEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTrackUnpublishedEvent performs a merge with any union data inside the WsEvent, using the provided TrackUnpublishedEvent
+func (t *WsEvent) MergeTrackUnpublishedEvent(v TrackUnpublishedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMuteChangedEvent returns the union data inside the WsEvent as a MuteChangedEvent
+func (t WsEvent) AsMuteChangedEvent() (MuteChangedEvent, error) {
+	var body MuteChangedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMuteChangedEvent overwrites any union data inside the WsEvent as the provided MuteChangedEvent
+func (t *WsEvent) FromMuteChangedEvent(v MuteChangedEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMuteChangedEvent performs a merge with any union data inside the WsEvent, using the provided MuteChangedEvent
+func (t *WsEvent) MergeMuteChangedEvent(v MuteChangedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRecordingStateChangedEvent returns the union data inside the WsEvent as a RecordingStateChangedEvent
+func (t WsEvent) AsRecordingStateChangedEvent() (RecordingStateChangedEvent, error) {
+	var body RecordingStateChangedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRecordingStateChangedEvent overwrites any union data inside the WsEvent as the provided RecordingStateChangedEvent
+func (t *WsEvent) FromRecordingStateChangedEvent(v RecordingStateChangedEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRecordingStateChangedEvent performs a merge with any union data inside the WsEvent, using the provided RecordingStateChangedEvent
+func (t *WsEvent) MergeRecordingStateChangedEvent(v RecordingStateChangedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAiJobStateChangedEvent returns the union data inside the WsEvent as a AiJobStateChangedEvent
+func (t WsEvent) AsAiJobStateChangedEvent() (AiJobStateChangedEvent, error) {
+	var body AiJobStateChangedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAiJobStateChangedEvent overwrites any union data inside the WsEvent as the provided AiJobStateChangedEvent
+func (t *WsEvent) FromAiJobStateChangedEvent(v AiJobStateChangedEvent) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAiJobStateChangedEvent performs a merge with any union data inside the WsEvent, using the provided AiJobStateChangedEvent
+func (t *WsEvent) MergeAiJobStateChangedEvent(v AiJobStateChangedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t WsEvent) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *WsEvent) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}

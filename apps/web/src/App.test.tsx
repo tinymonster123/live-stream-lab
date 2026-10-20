@@ -15,6 +15,15 @@ describe("App", () => {
     expect(html).toContain("File path");
   });
 
+  it("renders the Meeting controls", () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain("Meeting");
+    expect(html).toContain("Host name");
+    expect(html).toContain("Create Meeting");
+    expect(html).toContain("Join Room");
+  });
+
   it("renders a placeholder for infrastructure status", () => {
     const html = renderToString(<App />);
 
